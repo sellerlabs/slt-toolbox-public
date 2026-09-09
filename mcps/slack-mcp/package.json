@@ -1,0 +1,16 @@
+{
+  "name": "slack-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server for Slack: post/update/read messages, list channels, add reactions, upload files. LazyHub child 'slack'.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@slack/web-api": "^7.9.1",
+    "dotenv": "^16.4.5",
+    "zod": "^3.24.4"
+  }
+}

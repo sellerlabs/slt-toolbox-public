@@ -1,0 +1,15 @@
+{
+  "name": "notion-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server for the Notion API — search, query databases, read/create/update pages, read blocks. Returns FLATTENED properties instead of raw Notion JSON. LazyHub child 'notion'.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.4.5",
+    "zod": "^3.24.4"
+  }
+}

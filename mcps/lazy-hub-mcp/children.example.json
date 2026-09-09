@@ -1,0 +1,50 @@
+{
+  "_comment": "LazyHub child MCP registry. Edit this file to add/remove/modify children, then call hub_rediscover (no editor reload needed for the hub to re-read it). 'cwd' is relative to the lazy-hub-mcp folder. 'env' lists which process.env keys are forwarded to that child (most children load their own credentials from a local .env or JSON file, so env is usually []). Optional 'callTimeout' (ms) overrides the default per-call timeout. THIS IS A TEMPLATE: it lists only the MCPs shipped in slt-toolbox-public. Add your own children with cwd paths pointing at wherever you checked them out, and remove any you do not use.",
+  "children": {
+    "google-workspace": {
+      "command": "node",
+      "args": [
+        "--use-system-ca",
+        "server.js"
+      ],
+      "cwd": "../google-workspace-mcp",
+      "env": []
+    },
+    "slack": {
+      "command": "node",
+      "args": [
+        "--use-system-ca",
+        "server.js"
+      ],
+      "cwd": "../slack-mcp",
+      "env": []
+    },
+    "jira": {
+      "command": "node",
+      "args": [
+        "--use-system-ca",
+        "server.js"
+      ],
+      "cwd": "../jira-mcp",
+      "env": []
+    },
+    "notion": {
+      "command": "node",
+      "args": [
+        "--use-system-ca",
+        "server.js"
+      ],
+      "cwd": "../notion-mcp",
+      "env": []
+    },
+    "stripe": {
+      "command": "node",
+      "args": [
+        "--use-system-ca",
+        "server.js"
+      ],
+      "cwd": "../stripe-mcp",
+      "env": []
+    }
+  }
+}

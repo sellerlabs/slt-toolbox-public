@@ -1,0 +1,10 @@
+{
+  "name": "jira-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "3.24.4"
+  }
+}

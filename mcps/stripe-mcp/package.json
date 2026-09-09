@@ -1,0 +1,15 @@
+{
+  "name": "stripe-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Read-only reporting MCP for Stripe — lists payouts and subscriptions for the weekly Revenue and Subscription sheets. No charge/refund/payout-create tools.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "stripe": "^17.5.0",
+    "zod": "^3.24.4"
+  }
+}

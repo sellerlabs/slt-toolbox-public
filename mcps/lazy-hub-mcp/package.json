@@ -1,0 +1,9 @@
+{
+  "name": "lazy-mcp-hub",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}

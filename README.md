@@ -2,7 +2,7 @@
 
 Open-source [MCP](https://modelcontextprotocol.io) servers and Claude Code slash commands, published by [Seller Labs](https://sellerlabs.com).
 
-Everything here is credential-free. You bring your own tokens; nothing in this repo talks to Seller Labs infrastructure.
+Everything here is credential-free. You bring your own tokens, and nothing in this repo talks to Seller Labs infrastructure.
 
 ## What is in here
 
@@ -12,11 +12,9 @@ Everything here is credential-free. You bring your own tokens; nothing in this r
 |---|---|---|
 | `google-workspace-mcp` | Multi-account Gmail, Calendar, Drive, Sheets, Docs and Slides. Register each account under a nickname and target it per call. | Your own Google Cloud OAuth desktop client |
 | `slack-mcp` | Post and read messages, channels, reactions, file uploads. | Slack bot token |
-| `github-mcp` | Repos, pull requests, issues, search, workflows. | GitHub personal access token |
 | `jira-mcp` | Issues, boards, sprints, transitions, comments, attachments. | Atlassian API token |
 | `notion-mcp` | Search, pages, blocks, database queries, with a property normalizer that flattens Notion's nested property shapes into plain values. | Notion internal integration token |
-| `stripe-mcp` | Read-only subscriptions and payouts. | Stripe restricted API key |
-| `playwright-mcp` | Browser automation, visible and headless, with Chrome-native downloads. | None |
+| `stripe-mcp` | Read-only subscriptions and payouts, across up to three separate accounts. | Stripe restricted API key |
 | `lazy-hub-mcp` | An MCP loader and aggregator. Registers the others as children and hot-reloads them via `hub_rediscover`, with no editor restart. | None |
 
 ### Slash commands (`commands/claude-code-commands/`)
@@ -46,9 +44,11 @@ Register it with your MCP client. For Claude Code:
 claude mcp add <name> -- node /absolute/path/to/mcps/<the-mcp-you-want>/server.js
 ```
 
+`google-workspace-mcp` uses an OAuth flow rather than a token. See its own [README](mcps/google-workspace-mcp/README.md).
+
 ### Running several through Lazy Hub
 
-`lazy-hub-mcp` lets you register one MCP with your client and get all the others through it, with hot reload when you change the roster.
+`lazy-hub-mcp` lets you register one MCP with your client and reach all the others through it, with hot reload when you change the roster.
 
 ```bash
 cd mcps/lazy-hub-mcp
@@ -57,16 +57,18 @@ cp children.example.json children.json   # edit the cwd paths to match your chec
 claude mcp add lazy-hub -- node /absolute/path/to/mcps/lazy-hub-mcp/server.js
 ```
 
-Each MCP has its own `agent-guide.md` or `README.md` with setup details specific to it.
+Most MCPs ship an `agent-guide.md` with setup details specific to them.
 
 ## Requirements
 
 - Node.js 18 or newer
-- For `playwright-mcp`: `npx playwright install` after `npm install`
+- Each MCP installs its own dependencies. There is no workspace-level install.
 
 ## A note on how this repo is produced
 
-This is a publish-only mirror. The sources live in a private workspace and are mirrored out through a whitelist that copies only explicitly named files, hard-blocks credential files, and runs a secret scan before every push. Issues and discussion are welcome; changes are applied upstream and flow back down through the mirror.
+This is a publish-only mirror. The sources live in a private workspace and are mirrored out through a strict whitelist: a file ships only if a manifest glob names it explicitly, credential files are hard-blocked, and two gates run before every push. One checks that every import resolves to a file that was actually mirrored, so a server cannot ship without the module it loads. The other scans for credentials and for internal identifiers.
+
+That means the code here is genuinely standalone, but it also means these servers are shaped by how they are used upstream. If something looks like it assumes a convention you do not share, open an issue. Fixes are applied upstream and flow back down through the mirror.
 
 ## License
 
