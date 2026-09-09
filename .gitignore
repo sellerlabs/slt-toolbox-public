@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Secrets - never commit
+.env
+*.env
+!.env.example
+credentials.json
+tokens/
+auth.json
+config.json
+children.json
+connections.json
+
+# Build output
+dist/
+build/
+
+# Runtime
+logs/
+Logs/
+*.log
+temp/
+.playwright-mcp/
+
+# OS cruft
+.DS_Store
+Thumbs.db
