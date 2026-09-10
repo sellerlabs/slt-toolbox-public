@@ -1,0 +1,16 @@
+{
+  "name": "linear-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server for Linear project management — issues, projects, teams, cycles, comments, labels. Read plus write. Returns FLATTENED issue shapes instead of raw GraphQL nesting. LazyHub child 'linear'.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test-normalizer.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.4.5",
+    "zod": "^3.24.4"
+  }
+}
