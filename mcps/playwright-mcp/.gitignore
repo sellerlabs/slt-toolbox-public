@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Transient browser artifacts: screenshots, downloads, page snapshots.
+temp/
+
+# Playwright MCP runtime logs and browser profiles (contain live session cookies)
+.playwright-mcp/
+.playwright-profiles/
+
+# Cached tool manifest (regenerated at runtime)
+tools-cache.json
+
+# Logs
+Logs/
+*.log
+
+# Screenshots and captures (never commit account screenshots)
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Env / secrets
+.env
+*.env
+!.env.example
+
+# Working copies kept beside the live servers
+*.bak
+*.bak[0-9]*
+*.bak-*
+*.orig
+*.orig-*
+*.good
+*.good[0-9]
+*.attempt[0-9]
+*.failed-*
+*.pre-rollback
+
+# OS cruft
+.DS_Store
+Thumbs.db

@@ -13,6 +13,75 @@ import { gmail as gmailApi } from '@googleapis/gmail'
 const google = { gmail: gmailApi }
 
 /**
+ * Repair mojibake in inbound header text (added 2026-09-10).
+ *
+ * Some mail clients encode a UTF-8 subject, misread those bytes as Windows-1252,
+ * then re-encode the result as UTF-8 and label the header `=?UTF-8?Q?`. An em dash
+ * (E2 80 94) arrives as "\u00e2\u20ac\u201d". Gmail decodes it correctly per the DECLARED
+ * charset, so the corruption is already baked in before we see it -- it is a
+ * sender-side bug we can only repair cosmetically.
+ *
+ * Display layer only: callers use this for the value they show, never for what they
+ * store, reply to, or match on. Deliberately conservative -- a subject that genuinely
+ * contains that character sequence must survive untouched, so a repair is applied
+ * ONLY when both hold:
+ *   1. the text carries a known mojibake signature, and
+ *   2. the Windows-1252 round-trip is lossless (every char is a single byte, and the
+ *      re-decode as UTF-8 yields no U+FFFD).
+ * If either fails, the original string is returned unchanged.
+ */
+// The 27 Windows-1252 code points in 0x80-0x9F that differ from latin1. Mojibake from
+// a cp1252 misread routes through these, so a plain latin1 round-trip is not enough --
+// notably U+20AC (euro), which latin1 cannot represent at all.
+const CP1252_HIGH = new Map([
+  [0x20ac, 0x80], [0x201a, 0x82], [0x0192, 0x83], [0x201e, 0x84], [0x2026, 0x85],
+  [0x2020, 0x86], [0x2021, 0x87], [0x02c6, 0x88], [0x2030, 0x89], [0x0160, 0x8a],
+  [0x2039, 0x8b], [0x0152, 0x8c], [0x017d, 0x8e], [0x2018, 0x91], [0x2019, 0x92],
+  [0x201c, 0x93], [0x201d, 0x94], [0x2022, 0x95], [0x2013, 0x96], [0x2014, 0x97],
+  [0x02dc, 0x98], [0x2122, 0x99], [0x0161, 0x9a], [0x203a, 0x9b], [0x0153, 0x9c],
+  [0x017e, 0x9e], [0x0178, 0x9f],
+])
+
+/** Encode to Windows-1252 bytes, or null if any char is not representable. */
+function toCp1252(text) {
+  const out = Buffer.alloc(text.length)
+  for (let i = 0; i < text.length; i++) {
+    const cp = text.codePointAt(i)
+    if (cp > 0xffff) return null
+    if (cp <= 0xff) {
+      // 0x80-0x9F are undefined in cp1252; a raw C1 control means this is not mojibake.
+      if (cp >= 0x80 && cp <= 0x9f) return null
+      out[i] = cp
+    } else {
+      const b = CP1252_HIGH.get(cp)
+      if (b === undefined) return null
+      out[i] = b
+    }
+  }
+  return out
+}
+
+const MOJIBAKE_SIGNATURE = /\u00e2\u20ac|\u00c3[\u00a0-\u00bf]|\u00c2[\u00a0-\u00bf]/
+
+function repairMojibake(text) {
+  if (typeof text !== 'string' || !text) return text
+  if (!MOJIBAKE_SIGNATURE.test(text)) return text
+
+  // Every char must be representable in Windows-1252, or this is not double-encoded
+  // text and reinterpreting it would destroy data.
+  const bytes = toCp1252(text)
+  if (bytes === null) return text
+
+  const decoded = bytes.toString('utf8')
+  // U+FFFD means those bytes were not valid UTF-8 -- the premise was wrong, back off.
+  if (decoded.includes('\uFFFD') || decoded === text) return text
+
+  console.error(`[gmail] repaired mojibake header: ${JSON.stringify(text)} -> ${JSON.stringify(decoded)}`)
+  return decoded
+}
+
+
+/**
  * Search Gmail messages for an account.
  * Returns a list of message summaries.
  */
@@ -45,10 +114,10 @@ export async function searchGmail(auth, query, maxResults = 20) {
     return {
       id: data.id,
       threadId: data.threadId,
-      subject: headers['Subject'] || '(no subject)',
-      from: headers['From'] || '',
+      subject: repairMojibake(headers['Subject']) || '(no subject)',
+      from: repairMojibake(headers['From']) || '',
       date: headers['Date'] || '',
-      snippet: data.snippet || '',
+      snippet: repairMojibake(data.snippet) || '',
       labelIds: data.labelIds || [],
     }
   })
@@ -82,8 +151,8 @@ export async function readGmail(auth, messageId) {
   return {
     id: data.id,
     threadId: data.threadId,
-    subject: headers['Subject'] || '(no subject)',
-    from: headers['From'] || '',
+    subject: repairMojibake(headers['Subject']) || '(no subject)',
+    from: repairMojibake(headers['From']) || '',
     to: headers['To'] || '',
     date: headers['Date'] || '',
     body,

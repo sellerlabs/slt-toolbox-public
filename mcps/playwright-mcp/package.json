@@ -1,0 +1,18 @@
+{
+  "name": "playwright-mcp-persistent",
+  "version": "1.0.0",
+  "description": "Playwright MCP server with a persistent, visible system-Chrome session shared across MCP clients. Survives client/session close, supports browser extensions, and prunes large ARIA snapshots before they reach the model context.",
+  "main": "playwright-mcp-visible.js",
+  "private": true,
+  "scripts": {
+    "start": "node --use-system-ca playwright-mcp-visible.js",
+    "start:headless": "node --use-system-ca playwright-mcp-headless.js",
+    "start:launcher": "node playwright-mcp-launcher.js"
+  },
+  "dependencies": {
+    "@playwright/mcp": "^0.0.30"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
