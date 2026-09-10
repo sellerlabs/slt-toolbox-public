@@ -595,6 +595,132 @@ server.registerTool(
   })
 );
 
+// ---------------------------------------------------------------------------
+// Destructive tools
+//
+// Linear has no hard-delete mutation: issueDelete(id) moves an issue to trash,
+// which sets trashed AND archivedAt, and Linear purges trash after ~30 days.
+// issueUnarchive is the undo for both trash and archive, so it ships alongside
+// them: a delete tool with no in-tool recovery path is a worse tool.
+//
+// Every one of these reads the target's title first and echoes it back, so the
+// response says what was actually destroyed rather than just "success: true".
+// ---------------------------------------------------------------------------
+
+// Fetch identity before acting, so a mistaken id fails BEFORE the mutation and
+// the result can name what it touched.
+async function describeIssue(ref) {
+  const uuid = await resolveIssueUuid(ref);
+  const data = await gql(
+    `query Describe($id: String!) {
+       issue(id: $id) { id identifier title trashed archivedAt state { name type } }
+     }`,
+    { id: uuid }
+  );
+  if (!data.issue) throw new LinearError(`No issue found for "${ref}".`);
+  return data.issue;
+}
+
+server.registerTool(
+  'linear_delete_issue',
+  {
+    description:
+      'Move an issue to trash. This is Linear’s delete: it is a SOFT delete, recoverable with linear_unarchive_issue until Linear purges trash (about 30 days). Note that a trashed issue still resolves by id, so never test "did this get deleted" by whether the id still returns something; check the trashed flag this tool reports.',
+    inputSchema: {
+      id: z.string().describe('Issue identifier (ENG-123) or uuid.'),
+    },
+  },
+  handler(async (a) => {
+    const before = await describeIssue(a.id);
+    if (before.trashed) {
+      return ok({
+        deleted: false,
+        alreadyTrashed: true,
+        identifier: before.identifier,
+        title: before.title,
+        note: 'This issue was already in the trash. Nothing changed.',
+      });
+    }
+    const data = await gql(`mutation Del($id: String!) { issueDelete(id: $id) { success } }`, {
+      id: before.id,
+    });
+    if (!data.issueDelete?.success) throw new LinearError('Linear reported the delete as unsuccessful.');
+
+    // Confirm the flag actually flipped rather than trusting success:true.
+    const after = await describeIssue(before.id);
+    return ok({
+      deleted: true,
+      identifier: before.identifier,
+      title: before.title,
+      trashed: after.trashed,
+      recoverable: 'Restore with linear_unarchive_issue. Linear purges trash after about 30 days.',
+    });
+  })
+);
+
+server.registerTool(
+  'linear_archive_issue',
+  {
+    description:
+      'Archive an issue: tidy it out of active views without deleting it. Different intent from linear_delete_issue, which trashes. Reversible with linear_unarchive_issue and never purged.',
+    inputSchema: {
+      id: z.string().describe('Issue identifier (ENG-123) or uuid.'),
+    },
+  },
+  handler(async (a) => {
+    const before = await describeIssue(a.id);
+    if (before.archivedAt) {
+      return ok({
+        archived: false,
+        alreadyArchived: true,
+        identifier: before.identifier,
+        title: before.title,
+        note: 'This issue was already archived or trashed. Nothing changed.',
+      });
+    }
+    const data = await gql(`mutation Arch($id: String!) { issueArchive(id: $id) { success } }`, {
+      id: before.id,
+    });
+    if (!data.issueArchive?.success) throw new LinearError('Linear reported the archive as unsuccessful.');
+    return ok({ archived: true, identifier: before.identifier, title: before.title });
+  })
+);
+
+server.registerTool(
+  'linear_unarchive_issue',
+  {
+    description:
+      'Restore an issue from trash or from the archive, back into active views. This is the undo for both linear_delete_issue and linear_archive_issue. It cannot recover an issue Linear has already purged from trash.',
+    inputSchema: {
+      id: z.string().describe('Issue identifier (ENG-123) or uuid.'),
+    },
+  },
+  handler(async (a) => {
+    const before = await describeIssue(a.id);
+    if (!before.archivedAt && !before.trashed) {
+      return ok({
+        restored: false,
+        identifier: before.identifier,
+        title: before.title,
+        note: 'This issue is already active: it is neither trashed nor archived. Nothing changed.',
+      });
+    }
+    const data = await gql(`mutation Unarch($id: String!) { issueUnarchive(id: $id) { success } }`, {
+      id: before.id,
+    });
+    if (!data.issueUnarchive?.success) throw new LinearError('Linear reported the restore as unsuccessful.');
+    const after = await describeIssue(before.id);
+    return ok({
+      restored: true,
+      identifier: before.identifier,
+      title: before.title,
+      wasTrashed: before.trashed,
+      trashed: after.trashed,
+      state: after.state?.name,
+    });
+  })
+);
+
 // --- reference resolvers ---------------------------------------------------
 // Each takes the human-friendly form a caller would naturally pass and returns
 // the uuid the API needs, failing with the valid options rather than a bare id

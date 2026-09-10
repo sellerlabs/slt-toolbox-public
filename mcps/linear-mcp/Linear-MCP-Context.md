@@ -21,6 +21,12 @@ Linear nests every relation one object deep (`state: { name, type }`, `assignee:
 2. **`stateType` is the only rename-proof signal for "is this done".** State names are per-team and editable; the type (`triage`/`backlog`/`unstarted`/`started`/`completed`/`canceled`/`duplicate`) is not.
 3. **Priority sorts backwards.** 1 is Urgent, 4 is Low, 0 is None. And 0 is a real value, so never test priority for truthiness.
 
+## Delete semantics
+
+Linear has no hard delete. `linear_delete_issue` calls `issueDelete`, which moves the issue to trash: `trashed` and `archivedAt` are both set, and Linear purges trash after about 30 days. A trashed issue STILL resolves by id, so the `trashed` flag is the only reliable signal. `linear_unarchive_issue` restores from both trash and archive, and ships deliberately alongside the delete tool: a destructive tool with no in-tool recovery path is a worse tool.
+
+Each destructive tool reads the target first and echoes back its identifier and title, so the response says what was actually destroyed rather than just `success: true`. Repeat calls are guarded and report `nothing changed` instead of erroring.
+
 ## Completion gate
 
 There is deliberately no `linear_complete_issue` tool. Moving an issue to a done state goes through `linear_update_issue` with an explicit `state`, so closing work is always a stated intent rather than a side effect of some other call. The intent is that an agent can file, update and discuss work freely, but closing something is never an incidental side effect of another call.

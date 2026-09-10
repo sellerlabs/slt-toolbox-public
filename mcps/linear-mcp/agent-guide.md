@@ -40,6 +40,8 @@ Read: `linear_whoami`, `linear_list_teams`, `linear_search_issues`, `linear_get_
 
 Write: `linear_create_issue`, `linear_update_issue`, `linear_create_comment`, `linear_create_project`.
 
+Destructive: `linear_delete_issue`, `linear_archive_issue`, `linear_unarchive_issue`.
+
 ## Conventions
 
 - Responses are FLATTENED. Linear nests every relation one object deep and wraps every list in `{ nodes: [...] }`. `normalizer.js` reduces that to plain scalars, drops null relations, and never returns raw GraphQL shapes to a caller.
@@ -53,6 +55,10 @@ Write: `linear_create_issue`, `linear_update_issue`, `linear_create_comment`, `l
 **Priority 1 is the MOST urgent.** Linear's scale is 0 None, 1 Urgent, 2 High, 3 Medium, 4 Low, so it sorts backwards from intuition. Responses carry both `priority` and `priorityLabel` for that reason, and `parsePriority` accepts either the word or the number. Note 0 is a real value, not "unset", so never test it for truthiness.
 
 **Completion is never a convenience flag.** There is no `linear_complete_issue`. Closing work goes through `linear_update_issue` with an explicit state, so it is always a stated intent. Closing work should be an explicit act, not a side effect.
+
+**Delete is a SOFT delete, and a trashed issue still resolves by id.** Linear has no hard-delete mutation. `issueDelete` moves an issue to trash, setting both `trashed` and `archivedAt`, and Linear purges trash after about 30 days. Because `issue(id:)` keeps returning a trashed issue, never test "did this get deleted" by whether the id still resolves: read the `trashed` flag. `linear_unarchive_issue` is the undo for both trash and archive, which is why it ships alongside them.
+
+**Archive and delete are different intents.** Archive tidies finished work out of active views and is never purged. Delete trashes. Both set `archivedAt`, so only `trashed` distinguishes them.
 
 **`labels` on update REPLACES the set.** It does not append. Read the issue first if you mean to add one.
 
