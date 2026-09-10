@@ -48,7 +48,7 @@ Write: `linear_create_issue`, `linear_update_issue`, `linear_create_comment`, `l
 
 ## Gotchas
 
-**`stateType`, not `state`, decides whether work is done.** State NAMES are per-team and freely renameable ("In Progress" vs "Doing" vs "Active"). `stateType` is the stable machine value: `triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled`. Any logic asking "is this finished" must read `stateType`.
+**`stateType`, not `state`, decides whether work is done.** State NAMES are per-team and freely renameable ("In Progress" vs "Doing" vs "Active"). `stateType` is the stable machine value: `triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled`, `duplicate`. Any logic asking "is this finished" must read `stateType`.
 
 **Priority 1 is the MOST urgent.** Linear's scale is 0 None, 1 Urgent, 2 High, 3 Medium, 4 Low, so it sorts backwards from intuition. Responses carry both `priority` and `priorityLabel` for that reason, and `parsePriority` accepts either the word or the number. Note 0 is a real value, not "unset", so never test it for truthiness.
 

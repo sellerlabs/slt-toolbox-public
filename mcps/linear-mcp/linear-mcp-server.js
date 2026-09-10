@@ -146,7 +146,10 @@ server.registerTool(
       assignee: z.string().optional().describe('Assignee name or email. Use "me" for the API key owner.'),
       state: z.string().optional().describe('Workflow state NAME (e.g. "In Progress").'),
       stateType: z
-        .enum(['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled'])
+        // 'duplicate' is a real Linear state type and ships in the default
+        // workflow, but is missing from most docs and summaries of the API.
+        // Leaving it out made a legitimate filter fail schema validation.
+        .enum(['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled', 'duplicate'])
         .optional()
         .describe('Stable state category. Prefer this over state for "is it done" logic, since state names are per-team and renameable.'),
       project: z.string().optional().describe('Project name (exact) or uuid.'),

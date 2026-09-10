@@ -18,7 +18,7 @@ Linear nests every relation one object deep (`state: { name, type }`, `assignee:
 ## The three things that bite
 
 1. **Personal API keys are sent RAW in the Authorization header, with no `Bearer ` prefix.** Only OAuth tokens use Bearer. `client.js` detects the mistake and says so, because Linear's own response for it reads like a revoked key.
-2. **`stateType` is the only rename-proof signal for "is this done".** State names are per-team and editable; the type (`triage`/`backlog`/`unstarted`/`started`/`completed`/`canceled`) is not.
+2. **`stateType` is the only rename-proof signal for "is this done".** State names are per-team and editable; the type (`triage`/`backlog`/`unstarted`/`started`/`completed`/`canceled`/`duplicate`) is not.
 3. **Priority sorts backwards.** 1 is Urgent, 4 is Low, 0 is None. And 0 is a real value, so never test priority for truthiness.
 
 ## Completion gate
