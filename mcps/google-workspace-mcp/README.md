@@ -85,9 +85,8 @@ Tools then appear as `google_workspace_gmail_*`, `google_workspace_calendar_*`, 
 |---|---|
 | `server.js` | MCP server entry point — registers all tools |
 | `auth.js` | OAuth2 token manager (load, refresh, save, list accounts) |
-| `gmail.js` / `calendar.js` / `drive.js` / `sheets.js` | Per-surface API logic |
+| `gmail.js` / `calendar.js` / `drive.js` / `sheets.js` / `docs.js` / `slides.js` | Per-surface API logic |
 | `setup.js` | Interactive CLI to add/list accounts |
-| `get-url.mjs` | Helper to print an auth URL for headless/manual OAuth |
 
 ---
 

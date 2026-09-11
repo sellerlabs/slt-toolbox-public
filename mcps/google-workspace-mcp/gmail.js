@@ -262,6 +262,35 @@ function mimeTypeFromPath(filePath) {
 }
 
 /**
+ * RFC 2047 encode a MIME header value that contains non-ASCII characters.
+ *
+ * MIME headers have no charset mechanism, so a raw UTF-8 em dash in `Subject:`
+ * is read by Gmail as Latin-1 and arrives mojibake'd. Bodies are unaffected
+ * because their parts declare `charset=utf-8`.
+ *
+ * Pure-ASCII values are returned unchanged, so the common case is byte-identical
+ * to the previous behavior. Longer values are split across multiple encoded-words
+ * to respect the 75-char per-line cap; the 45-byte chunk keeps each base64 word
+ * under 63 chars. Chunking walks code points, never bytes, so a multi-byte
+ * character is not split down the middle.
+ */
+function encodeMimeHeader(value) {
+  if (!value || !/[^\x00-\x7F]/.test(value)) return value
+  const words = []
+  let chunk = ''
+  const flush = () => {
+    if (chunk) words.push(`=?UTF-8?B?${Buffer.from(chunk, 'utf8').toString('base64')}?=`)
+    chunk = ''
+  }
+  for (const ch of value) {
+    if (Buffer.byteLength(chunk + ch, 'utf8') > 45) flush()
+    chunk += ch
+  }
+  flush()
+  return words.join('\r\n ')
+}
+
+/**
  * Build a multipart/alternative block (plain text + HTML).
  * Returns { boundary, block } where block is the MIME string.
  */
@@ -357,7 +386,7 @@ export async function createGmailDraft(auth, to, subject, body, attachmentPaths 
     const message = [
       `To: ${to}`,
       ...ccHeader,
-      `Subject: ${subject}`,
+      `Subject: ${encodeMimeHeader(subject)}`,
       ...replyHeaders,
       'Content-Type: text/plain; charset=utf-8',
       '',
@@ -371,7 +400,7 @@ export async function createGmailDraft(auth, to, subject, body, attachmentPaths 
     const message = [
       `To: ${to}`,
       ...ccHeader,
-      `Subject: ${subject}`,
+      `Subject: ${encodeMimeHeader(subject)}`,
       ...replyHeaders,
       'MIME-Version: 1.0',
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
@@ -424,7 +453,7 @@ export async function createGmailDraft(auth, to, subject, body, attachmentPaths 
     const message = [
       `To: ${to}`,
       ...ccHeader,
-      `Subject: ${subject}`,
+      `Subject: ${encodeMimeHeader(subject)}`,
       ...replyHeaders,
       'MIME-Version: 1.0',
       `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
@@ -492,7 +521,7 @@ export async function sendGmailMessage(auth, to, subject, body, attachmentPaths 
     const message = [
       `To: ${to}`,
       ...ccHeader,
-      `Subject: ${subject}`,
+      `Subject: ${encodeMimeHeader(subject)}`,
       ...replyHeaders,
       'Content-Type: text/plain; charset=utf-8',
       '',
@@ -505,7 +534,7 @@ export async function sendGmailMessage(auth, to, subject, body, attachmentPaths 
     const message = [
       `To: ${to}`,
       ...ccHeader,
-      `Subject: ${subject}`,
+      `Subject: ${encodeMimeHeader(subject)}`,
       ...replyHeaders,
       'MIME-Version: 1.0',
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
@@ -557,7 +586,7 @@ export async function sendGmailMessage(auth, to, subject, body, attachmentPaths 
     const message = [
       `To: ${to}`,
       ...ccHeader,
-      `Subject: ${subject}`,
+      `Subject: ${encodeMimeHeader(subject)}`,
       ...replyHeaders,
       'MIME-Version: 1.0',
       `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,

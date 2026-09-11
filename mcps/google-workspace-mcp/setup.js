@@ -96,7 +96,7 @@ async function addAccount(nick, aliasArg) {
     server.on('error', reject)
     setTimeout(() => {
       server.close()
-      reject(new Error('Timed out waiting for OAuth callback (2 min)'))
+      reject(new Error('Timed out waiting for OAuth callback (5 min)'))
     }, 300_000)
   })
 

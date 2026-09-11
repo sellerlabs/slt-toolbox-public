@@ -21,7 +21,7 @@
 // `"overrides": { "google-auth-library": "^10.5.0" }` collapses them to one copy.
 import { OAuth2Client } from 'google-auth-library'
 const google = { auth: { OAuth2: OAuth2Client } }
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -70,6 +70,7 @@ export function resolveAccountId(input) {
 
   // 2. Email / alias match.
   if (!input.includes('@')) return null
+  if (!existsSync(TOKENS_DIR)) return null
   const needle = input.toLowerCase()
   const matches = []
   for (const f of readdirSync(TOKENS_DIR)) {
@@ -133,6 +134,9 @@ export function loadAccountAuth(account) {
  * Preserves any existing `aliases[]` on re-auth so email/alias resolution survives.
  */
 export function saveAccountTokens(nickname, tokens, email, aliases) {
+  // tokens/ is gitignored, so a fresh checkout has no such directory. Create it
+  // here or the very first connect throws ENOENT *after* OAuth already succeeded.
+  mkdirSync(TOKENS_DIR, { recursive: true })
   const tokenPath = join(TOKENS_DIR, `${nickname}.json`)
   let existingAliases = []
   if (existsSync(tokenPath)) {
