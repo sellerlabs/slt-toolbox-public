@@ -1,0 +1,21 @@
+# The mirror stages every text file with LF endings (applyReplacements normalizes
+# to LF before scrubbing). Without this, Git's autocrlf on a Windows checkout
+# rewrites them to CRLF on checkout, so the next scheduled sync sees all ~64
+# files as modified and commits line-ending-only churn every night.
+#
+# Normalize in the repo, and check out LF so the working tree matches what the
+# mirror produces. That makes an unchanged sync a genuine no-op.
+* text=auto eol=lf
+
+# Binaries must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.gz binary
