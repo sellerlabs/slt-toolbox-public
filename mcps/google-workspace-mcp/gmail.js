@@ -102,7 +102,7 @@ export async function searchGmail(auth, query, maxResults = 20) {
         userId: 'me',
         id: m.id,
         format: 'metadata',
-        metadataHeaders: ['Subject', 'From', 'Date'],
+        metadataHeaders: ['Subject', 'From', 'To', 'Cc', 'Date'],
       })
     )
   )
@@ -116,6 +116,8 @@ export async function searchGmail(auth, query, maxResults = 20) {
       threadId: data.threadId,
       subject: repairMojibake(headers['Subject']) || '(no subject)',
       from: repairMojibake(headers['From']) || '',
+      to: headers['To'] || '',
+      cc: headers['Cc'] || '',
       date: headers['Date'] || '',
       snippet: repairMojibake(data.snippet) || '',
       labelIds: data.labelIds || [],
@@ -154,6 +156,8 @@ export async function readGmail(auth, messageId) {
     subject: repairMojibake(headers['Subject']) || '(no subject)',
     from: repairMojibake(headers['From']) || '',
     to: headers['To'] || '',
+    cc: headers['Cc'] || '',
+    bcc: headers['Bcc'] || '',
     date: headers['Date'] || '',
     body,
     attachments,

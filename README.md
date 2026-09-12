@@ -4,6 +4,8 @@ Open-source [MCP](https://modelcontextprotocol.io) servers and Claude Code slash
 
 Everything here is credential-free. You bring your own tokens, and nothing in this repo talks to Seller Labs infrastructure.
 
+**Setting up from scratch? Start with [SETUP.md](SETUP.md)** for the ordered path from a bare machine to a working stack. The install order is not arbitrary, and two of the steps are deliberately out of the obvious sequence. This README is the catalog and assumes you already have an environment.
+
 ## What is in here
 
 ### MCP servers (`mcps/`)
