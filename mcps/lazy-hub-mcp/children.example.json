@@ -6,6 +6,8 @@
     "jira":             { "command": "node", "args": ["--use-system-ca", "server.js"], "cwd": "../jira-mcp", "env": [] },
     "notion":           { "command": "node", "args": ["--use-system-ca", "server.js"], "cwd": "../notion-mcp", "env": [] },
     "linear":           { "command": "node", "args": ["--use-system-ca", "server.js"], "cwd": "../linear-mcp", "env": [] },
-    "stripe":           { "command": "node", "args": ["--use-system-ca", "server.js"], "cwd": "../stripe-mcp", "env": [] }
+    "stripe":           { "command": "node", "args": ["--use-system-ca", "server.js"], "cwd": "../stripe-mcp", "env": [] },
+    "playwright-visible":  { "command": "node", "args": ["--use-system-ca", "playwright-mcp-visible.js"],  "cwd": "../playwright-mcp", "env": [], "noIdleTimeout": true },
+    "playwright-headless": { "command": "node", "args": ["--use-system-ca", "playwright-mcp-headless.js"], "cwd": "../playwright-mcp", "env": [], "noIdleTimeout": true }
   }
 }
