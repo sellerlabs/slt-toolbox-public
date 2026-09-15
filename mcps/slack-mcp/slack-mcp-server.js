@@ -124,8 +124,34 @@ server.registerTool('slack_read_channel', {
     const res = await client.conversations.history({ channel: channelId, limit });
     const msgs = res.messages || [];
     if (!msgs.length) return ok('No messages found.');
-    const lines = msgs.map(m => `[ts ${m.ts}]${m.thread_ts && m.thread_ts !== m.ts ? ' (reply)' : ''} ${m.user || m.username || m.bot_id || '?'}: ${m.text || ''}`);
+    // reply_count MUST be surfaced: without it a parent carrying threaded replies renders
+    // identically to one with none, which silently hides whole conversations from the reader.
+    const lines = msgs.map(m => `[ts ${m.ts}]${m.thread_ts && m.thread_ts !== m.ts ? ' (reply)' : ''}${m.reply_count ? ` [thread: ${m.reply_count} replies, use slack_read_thread with thread_ts ${m.ts}]` : ''} ${m.user || m.username || m.bot_id || '?'}: ${m.text || ''}`);
     return ok(lines.join('\n\n'));
+  } catch (err) {
+    throw apiError(err);
+  }
+});
+
+// ---- read_thread ----------------------------------------------------------
+server.registerTool('slack_read_thread', {
+  description: 'Read all replies in a thread (conversations.replies). Pass the parent message ts as thread_ts; slack_read_channel marks parents that have replies.',
+  inputSchema: {
+    channel: z.string().optional().describe('Channel ID or name containing the thread.'),
+    thread_ts: z.string().describe('ts of the thread parent message (from slack_read_channel).'),
+    limit: z.number().int().min(1).max(200).default(100).describe('Max messages to return (1-200, default 100).'),
+  },
+}, async ({ channel, thread_ts, limit }) => {
+  const client = getClient();
+  try {
+    const channelId = await resolveChannel(client, channel || DEFAULT_CHANNEL);
+    const res = await client.conversations.replies({ channel: channelId, ts: thread_ts, limit });
+    const msgs = res.messages || [];
+    if (!msgs.length) return ok('No messages found in thread.');
+    // conversations.replies returns the parent as the first element, not a reply.
+    const lines = msgs.map((m, i) => `[ts ${m.ts}] ${i === 0 ? '(parent)' : '(reply)'} ${m.user || m.username || m.bot_id || '?'}: ${m.text || ''}`);
+    const summary = `Thread ${thread_ts} in ${channel}: ${msgs.length - 1} repl${msgs.length - 1 === 1 ? 'y' : 'ies'} (parent shown first).`;
+    return ok(summary + '\n\n' + lines.join('\n\n'));
   } catch (err) {
     throw apiError(err);
   }
