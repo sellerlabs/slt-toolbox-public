@@ -109,16 +109,16 @@ export async function searchGmail(auth, query, maxResults = 20) {
 
   return details.map(({ data }) => {
     const headers = Object.fromEntries(
-      (data.payload?.headers || []).map((h) => [h.name, h.value])
+      (data.payload?.headers || []).map((h) => [h.name.toLowerCase(), h.value])
     )
     return {
       id: data.id,
       threadId: data.threadId,
-      subject: repairMojibake(headers['Subject']) || '(no subject)',
-      from: repairMojibake(headers['From']) || '',
-      to: headers['To'] || '',
-      cc: headers['Cc'] || '',
-      date: headers['Date'] || '',
+      subject: repairMojibake(headers['subject']) || '(no subject)',
+      from: repairMojibake(headers['from']) || '',
+      to: headers['to'] || '',
+      cc: headers['cc'] || '',
+      date: headers['date'] || '',
       snippet: repairMojibake(data.snippet) || '',
       labelIds: data.labelIds || [],
     }
@@ -144,7 +144,7 @@ export async function readGmail(auth, messageId) {
   })
 
   const headers = Object.fromEntries(
-    (data.payload?.headers || []).map((h) => [h.name, h.value])
+    (data.payload?.headers || []).map((h) => [h.name.toLowerCase(), h.value])
   )
 
   const body = extractBody(data.payload)
@@ -153,12 +153,12 @@ export async function readGmail(auth, messageId) {
   return {
     id: data.id,
     threadId: data.threadId,
-    subject: repairMojibake(headers['Subject']) || '(no subject)',
-    from: repairMojibake(headers['From']) || '',
-    to: headers['To'] || '',
-    cc: headers['Cc'] || '',
-    bcc: headers['Bcc'] || '',
-    date: headers['Date'] || '',
+    subject: repairMojibake(headers['subject']) || '(no subject)',
+    from: repairMojibake(headers['from']) || '',
+    to: headers['to'] || '',
+    cc: headers['cc'] || '',
+    bcc: headers['bcc'] || '',
+    date: headers['date'] || '',
     body,
     attachments,
     labelIds: data.labelIds || [],
@@ -367,7 +367,7 @@ export async function createGmailDraft(auth, to, subject, body, attachmentPaths 
     ? [`In-Reply-To: ${replyToMessageId}`, `References: ${replyToMessageId}`]
     : []
 
-  const ccHeader = cc ? [`CC: ${cc}`] : []
+  const ccHeader = cc ? [`Cc: ${cc}`] : []
 
   // Auto-link URLs and auto-detect HTML in body when bodyHtml was not provided
   if (!bodyHtml && body) {
@@ -503,7 +503,7 @@ export async function sendGmailMessage(auth, to, subject, body, attachmentPaths 
     ? [`In-Reply-To: ${replyToMessageId}`, `References: ${replyToMessageId}`]
     : []
 
-  const ccHeader = cc ? [`CC: ${cc}`] : []
+  const ccHeader = cc ? [`Cc: ${cc}`] : []
 
   // Auto-link URLs and auto-detect HTML in body when bodyHtml was not provided
   if (!bodyHtml && body) {
