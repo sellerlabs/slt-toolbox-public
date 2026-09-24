@@ -1,0 +1,15 @@
+{
+  "name": "openrouter-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for OpenRouter: chat with any of ~400 models, browse the priced model catalog, check credit usage, and run multi-model panels.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.4.5",
+    "zod": "^3.24.4"
+  }
+}
