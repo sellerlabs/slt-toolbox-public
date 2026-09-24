@@ -17,6 +17,7 @@ Everything here is credential-free. You bring your own tokens, and nothing in th
 | `jira-mcp` | Issues, boards, sprints, transitions, comments, attachments. | Atlassian API token |
 | `notion-mcp` | Search, pages, blocks, database queries, with a property normalizer that flattens Notion's nested property shapes into plain values. | Notion internal integration token |
 | `linear-mcp` | Issues, projects, teams, cycles, workflow states, labels and comments, read and write. Flattens Linear’s nested GraphQL shapes into plain values. | Linear personal API key |
+| `openrouter-mcp` | One key to ~400 models: chat (with image input), multi-model panels, priced catalog search, benchmark rankings, credit usage, and image generation to disk. | OpenRouter API key |
 | `stripe-mcp` | Read-only subscriptions and payouts, across up to three separate accounts. | Stripe restricted API key |
 | `lazy-hub-mcp` | An MCP loader and aggregator. Registers the others as children and hot-reloads them via `hub_rediscover`, with no editor restart. | None |
 
