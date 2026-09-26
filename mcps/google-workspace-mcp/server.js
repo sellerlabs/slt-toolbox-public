@@ -54,7 +54,7 @@ function validateSavePath(savePath) {
 }
 import { listCalendarEvents, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, findFreeTime } from './calendar.js'
 import { searchDrive, listDriveFiles, readDriveFile, uploadDriveFile, convertToDoc, moveDriveFile, renameDriveFile, createDriveFolder } from './drive.js'
-import { createSpreadsheet, convertToSheet, getSpreadsheetInfo, readSheetRange, writeSheetRange, appendSheetRows, insertRows, clearSheetRange, batchWriteSheet } from './sheets.js'
+import { createSpreadsheet, convertToSheet, getSpreadsheetInfo, readSheetRange, writeSheetRange, appendSheetRows, insertRows, insertColumns, moveColumns, setCellColor, readSheetFormat, clearSheetRange, batchWriteSheet } from './sheets.js'
 import { createDoc, readDoc, appendToDoc, replaceTextInDoc } from './docs.js'
 import { createPresentation, getPresentation, addSlide, setSlideText, deleteSlide, setSpeakerNotes } from './slides.js'
 
@@ -621,6 +621,77 @@ server.tool(
   async ({ spreadsheetId, startIndex, numRows, sheetName, values, inheritFromBefore, account }) => {
     const [{ auth }] = resolveAccounts(account)
     const result = await insertRows(auth, spreadsheetId, startIndex, numRows, sheetName, values, inheritFromBefore)
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  }
+)
+
+server.tool(
+  'sheets_insert_columns',
+  'Insert blank columns into a sheet, shifting existing columns RIGHT (never overwrites). Use this to add a column in the middle of a table (sheets_write can only fill existing cells). Optionally writes values (e.g. a header) into the new columns starting at row 1.',
+  {
+    spreadsheetId: z.string().describe('Google Sheets spreadsheet ID'),
+    startColumn: z.union([z.string(), z.number().int().min(0)]).describe('Column to insert BEFORE: an A1 letter like "I", or a 0-based index like 8. "A" or 0 = insert at the far left.'),
+    numColumns: z.number().int().min(1).optional().describe('Number of blank columns to insert (default 1)'),
+    sheetName: z.string().optional().describe('Tab name to insert into (defaults to the first tab)'),
+    values: z.array(z.array(z.any())).optional().describe('Optional 2D array (rows of cells) written into the new columns starting at row 1, e.g. [["New Header"]] for a single header cell'),
+    inheritFromBefore: z.boolean().optional().describe('If true (default), new columns inherit formatting from the column to the LEFT; if false, from the column to the right'),
+    account: z.string().describe('Account nickname, email, or alias that owns this sheet (required)'),
+  },
+  async ({ spreadsheetId, startColumn, numColumns, sheetName, values, inheritFromBefore, account }) => {
+    const [{ auth }] = resolveAccounts(account)
+    const result = await insertColumns(auth, spreadsheetId, startColumn, numColumns, sheetName, values, inheritFromBefore)
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  }
+)
+
+server.tool(
+  'sheets_move_columns',
+  'Move one column (or a block of adjacent columns) to a new position, carrying all values and formatting with it. Name every column by its position BEFORE the move. Example: to put column K right after column H, use sourceStart "K", beforeColumn "I". Returns where the block ended up. Always read back the header row afterwards.',
+  {
+    spreadsheetId: z.string().describe('Google Sheets spreadsheet ID'),
+    sourceStart: z.union([z.string(), z.number().int().min(0)]).describe('First column to move: A1 letter like "K" or 0-based index like 10'),
+    sourceEnd: z.union([z.string(), z.number().int().min(0)]).optional().describe('Last column to move, INCLUSIVE (defaults to sourceStart, i.e. move one column)'),
+    beforeColumn: z.union([z.string(), z.number().int().min(0)]).optional().describe('The block lands immediately before this column, named by its PRE-move position (letter or 0-based index). Required unless toEnd is true.'),
+    toEnd: z.boolean().optional().describe('If true, move the block after the last column that holds data in any row (ignores beforeColumn)'),
+    sheetName: z.string().optional().describe('Tab name (defaults to the first tab)'),
+    account: z.string().describe('Account nickname, email, or alias that owns this sheet (required)'),
+  },
+  async ({ spreadsheetId, sourceStart, sourceEnd, beforeColumn, toEnd, sheetName, account }) => {
+    const [{ auth }] = resolveAccounts(account)
+    const result = await moveColumns(auth, spreadsheetId, sourceStart, sourceEnd, beforeColumn, sheetName, toEnd)
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  }
+)
+
+server.tool(
+  'sheets_set_cell_color',
+  'Set the background fill color (and optionally the text color) of a range of cells, e.g. highlight a row. Only the color changes: values, number formats, borders and other formatting are untouched. Pass "none" to clear a color.',
+  {
+    spreadsheetId: z.string().describe('Google Sheets spreadsheet ID'),
+    range: z.string().describe('A1 range including the tab, e.g. "Main!A5:K5" (one row), "Main!C2" (one cell), "Main!C:C" (whole column), "Main!5:5" (whole row). Tab defaults to the first tab if omitted.'),
+    backgroundColor: z.string().optional().describe('Fill color as hex, e.g. "#FFF2CC" (light yellow), "#D9EAD3" (light green), "#F4CCCC" (light red). "none" clears the fill.'),
+    textColor: z.string().optional().describe('Optional text color as hex, e.g. "#CC0000". "none" resets to the default.'),
+    account: z.string().describe('Account nickname, email, or alias that owns this sheet (required)'),
+  },
+  async ({ spreadsheetId, range, backgroundColor, textColor, account }) => {
+    const [{ auth }] = resolveAccounts(account)
+    const result = await setCellColor(auth, spreadsheetId, range, backgroundColor, textColor)
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  }
+)
+
+server.tool(
+  'sheets_read_format',
+  'Read cells WITH their formatting: value plus fill color (backgroundColor), text color (textColor) and bold, as hex. Use this to see or verify highlights (sheets_read returns values only), e.g. after sheets_set_cell_color. Rows carry their real 1-based sheet row number and each cell its A1 address. Default white fill / black text are omitted. Shows formatting set on the cell, not conditional-formatting results.',
+  {
+    spreadsheetId: z.string().describe('Google Sheets spreadsheet ID'),
+    range: z.string().describe('A1 range including the tab, e.g. "Main!A1:K10". Keep it bounded: formatting output is larger than values.'),
+    onlyFormatted: z.boolean().optional().describe('If true, return only cells that have a fill color, text color, or bold (good for "which rows are highlighted?")'),
+    account: z.string().describe('Account nickname, email, or alias that owns this sheet (required)'),
+  },
+  async ({ spreadsheetId, range, onlyFormatted, account }) => {
+    const [{ auth }] = resolveAccounts(account)
+    const result = await readSheetFormat(auth, spreadsheetId, range, onlyFormatted)
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
   }
 )

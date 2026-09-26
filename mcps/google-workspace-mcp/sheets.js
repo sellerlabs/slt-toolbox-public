@@ -343,3 +343,312 @@ export async function batchWriteSheet(auth, spreadsheetId, updates) {
     })),
   }
 }
+
+/**
+ * Convert a column reference to a 0-based index. Accepts a letter ("A", "k", "AA")
+ * or a 0-based number (or numeric string).
+ */
+function columnToIndex(col) {
+  if (typeof col === 'number') return col
+  const s = String(col).trim()
+  if (/^\d+$/.test(s)) return Number(s)
+  if (!/^[A-Za-z]+$/.test(s)) throw new Error(`Invalid column reference "${col}" (use a letter like "K" or a 0-based index)`)
+  let n = 0
+  for (const ch of s.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64)
+  return n - 1
+}
+
+/** Convert a 0-based column index to its A1 letter (0 -> "A", 26 -> "AA"). */
+function indexToColumn(index) {
+  let s = ''
+  for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s
+  return s
+}
+
+/** Resolve a tab name to its properties (defaults to the first tab). */
+async function resolveSheetProps(sheets, spreadsheetId, sheetName) {
+  const { data: meta } = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties(sheetId,title,index,gridProperties.columnCount)',
+  })
+  const props = (meta.sheets || []).map(s => s.properties)
+  const target = sheetName
+    ? props.find(p => p.title === sheetName)
+    : props.find(p => p.index === 0) || props[0]
+  if (!target) {
+    throw new Error(sheetName ? `Sheet tab "${sheetName}" not found` : 'No sheets found in spreadsheet')
+  }
+  return target
+}
+
+/**
+ * Insert blank columns into a sheet, shifting existing columns RIGHT (does not overwrite).
+ * Uses the Sheets insertDimension batchUpdate. Optionally writes values into the
+ * newly-created blank columns (row-major 2D array starting at row 1 of the first new column).
+ *
+ * @param {string} spreadsheetId
+ * @param {string|number} startColumn - Column to insert BEFORE: a letter ("I") or 0-based index (8).
+ * @param {number} [numColumns=1] - How many blank columns to insert.
+ * @param {string} [sheetName] - Tab name (defaults to the first tab).
+ * @param {Array<Array<any>>} [values] - Optional 2D array (rows of cells) written into the new columns from row 1.
+ * @param {boolean} [inheritFromBefore=true] - If true, new columns inherit formatting from the column to the left; otherwise from the right.
+ */
+export async function insertColumns(auth, spreadsheetId, startColumn, numColumns = 1, sheetName, values, inheritFromBefore = true) {
+  const sheets = google.sheets({ version: 'v4', auth })
+  const target = await resolveSheetProps(sheets, spreadsheetId, sheetName)
+  const sheetId = target.sheetId
+  const startIndex = columnToIndex(startColumn)
+  const cols = Math.max(1, numColumns)
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        insertDimension: {
+          range: { sheetId, dimension: 'COLUMNS', startIndex, endIndex: startIndex + cols },
+          // Inserting at column A has no column before it to inherit from.
+          inheritFromBefore: startIndex === 0 ? false : inheritFromBefore,
+        },
+      }],
+    },
+  })
+
+  let write
+  if (values && values.length) {
+    const range = `${target.title}!${indexToColumn(startIndex)}1`
+    const { data } = await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values },
+    })
+    write = { updatedRange: data.updatedRange, updatedCells: data.updatedCells }
+  }
+
+  return {
+    spreadsheetId,
+    sheet: target.title,
+    sheetId,
+    insertedColumns: cols,
+    insertedAt: `${indexToColumn(startIndex)}${cols > 1 ? `:${indexToColumn(startIndex + cols - 1)}` : ''}`,
+    ...(write ? { write } : {}),
+  }
+}
+
+/**
+ * Move one or more adjacent columns (values, formatting, and all) to a new position.
+ * Uses the Sheets moveDimension batchUpdate.
+ *
+ * Semantics: the moved block lands immediately BEFORE `beforeColumn`, where `beforeColumn`
+ * is named by its position BEFORE the move (this is exactly the API's destinationIndex).
+ * To move after the last column holding data, set toEnd=true instead of passing beforeColumn.
+ *
+ * @param {string} spreadsheetId
+ * @param {string|number} sourceStart - First column to move: letter ("K") or 0-based index (10).
+ * @param {string|number} [sourceEnd] - Last column to move, INCLUSIVE (defaults to sourceStart).
+ * @param {string|number} [beforeColumn] - Pre-move column the block should land before.
+ * @param {string} [sheetName] - Tab name (defaults to the first tab).
+ * @param {boolean} [toEnd=false] - Move the block after the last column holding data instead of using beforeColumn.
+ */
+export async function moveColumns(auth, spreadsheetId, sourceStart, sourceEnd, beforeColumn, sheetName, toEnd = false) {
+  const sheets = google.sheets({ version: 'v4', auth })
+  const target = await resolveSheetProps(sheets, spreadsheetId, sheetName)
+  const sheetId = target.sheetId
+  const columnCount = target.gridProperties?.columnCount
+
+  const startIndex = columnToIndex(sourceStart)
+  const lastIndex = sourceEnd === undefined || sourceEnd === null || sourceEnd === '' ? startIndex : columnToIndex(sourceEnd)
+  if (lastIndex < startIndex) throw new Error('sourceEnd must be at or after sourceStart')
+  const endIndex = lastIndex + 1 // exclusive
+
+  let destinationIndex
+  if (toEnd) {
+    // "End" means after the last column holding data in any row, not the last grid column
+    // (sheets carry many empty trailing columns).
+    const { data: vals } = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${target.title}'` })
+    const usedCols = Math.max(0, ...(vals.values || []).map(r => r.length))
+    destinationIndex = Math.min(usedCols || columnCount, columnCount)
+  } else {
+    if (beforeColumn === undefined || beforeColumn === null || beforeColumn === '') {
+      throw new Error('Provide beforeColumn, or set toEnd=true')
+    }
+    destinationIndex = columnToIndex(beforeColumn)
+  }
+  if (destinationIndex >= startIndex && destinationIndex <= endIndex) {
+    throw new Error('beforeColumn falls inside or directly after the moved block, so nothing would move')
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        moveDimension: {
+          source: { sheetId, dimension: 'COLUMNS', startIndex, endIndex },
+          destinationIndex,
+        },
+      }],
+    },
+  })
+
+  // Where the block ends up after the move (moving right shifts it left by its own width).
+  const width = endIndex - startIndex
+  const finalStart = destinationIndex > startIndex ? destinationIndex - width : destinationIndex
+  return {
+    spreadsheetId,
+    sheet: target.title,
+    sheetId,
+    moved: `${indexToColumn(startIndex)}${width > 1 ? `:${indexToColumn(lastIndex)}` : ''}`,
+    destinationIndex,
+    nowAt: `${indexToColumn(finalStart)}${width > 1 ? `:${indexToColumn(finalStart + width - 1)}` : ''}`,
+  }
+}
+
+/** Parse "#RRGGBB" / "RRGGBB" / "#RGB" into a Sheets Color object (0-1 floats). */
+function hexToColor(hex) {
+  let h = String(hex).trim().replace(/^#/, '')
+  if (/^[0-9a-f]{3}$/i.test(h)) h = h.split('').map(c => c + c).join('')
+  if (!/^[0-9a-f]{6}$/i.test(h)) throw new Error(`Invalid color "${hex}" (use hex like "#FFF2CC")`)
+  return {
+    red: parseInt(h.slice(0, 2), 16) / 255,
+    green: parseInt(h.slice(2, 4), 16) / 255,
+    blue: parseInt(h.slice(4, 6), 16) / 255,
+  }
+}
+
+/**
+ * Parse an A1 range ("Main!A2:K2", "B5", "C:C", "3:4") into a tab name and a 0-based,
+ * end-exclusive GridRange (sheetId filled in by the caller). Open-ended sides are omitted.
+ */
+function parseA1Range(a1) {
+  let tab
+  let ref = String(a1).trim()
+  const bang = ref.lastIndexOf('!')
+  if (bang !== -1) {
+    tab = ref.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'")
+    ref = ref.slice(bang + 1)
+  }
+  const parseCell = (cell) => {
+    const m = /^([A-Za-z]*)(\d*)$/.exec(cell)
+    if (!m || (!m[1] && !m[2])) throw new Error(`Invalid A1 range "${a1}"`)
+    return { col: m[1] ? columnToIndex(m[1]) : undefined, row: m[2] ? Number(m[2]) - 1 : undefined }
+  }
+  const [a, b = a] = ref.split(':')
+  const start = parseCell(a)
+  const end = parseCell(b)
+  const grid = {}
+  if (start.row !== undefined) grid.startRowIndex = start.row
+  if (end.row !== undefined) grid.endRowIndex = end.row + 1
+  if (start.col !== undefined) grid.startColumnIndex = start.col
+  if (end.col !== undefined) grid.endColumnIndex = end.col + 1
+  return { tab, grid }
+}
+
+/**
+ * Set the background fill (and optionally the text color) of a range of cells.
+ * Uses repeatCell with a narrow fields mask, so values, number formats, borders,
+ * and other formatting are left untouched.
+ *
+ * @param {string} spreadsheetId
+ * @param {string} range - A1 range, e.g. "Main!A5:K5". Tab defaults to the first tab if omitted.
+ * @param {string} [backgroundColor] - Hex fill like "#FFF2CC", or "none" to clear the fill.
+ * @param {string} [textColor] - Optional hex text color, or "none" to reset to default.
+ */
+export async function setCellColor(auth, spreadsheetId, range, backgroundColor, textColor) {
+  if (!backgroundColor && !textColor) throw new Error('Provide backgroundColor and/or textColor')
+  const sheets = google.sheets({ version: 'v4', auth })
+  const { tab, grid } = parseA1Range(range)
+  const target = await resolveSheetProps(sheets, spreadsheetId, tab)
+
+  const isNone = (c) => String(c).trim().toLowerCase() === 'none'
+  const format = {}
+  const fields = []
+  if (backgroundColor) {
+    // Clearing the field in the mask (with no value) resets the fill to none.
+    if (!isNone(backgroundColor)) format.backgroundColor = hexToColor(backgroundColor)
+    fields.push('userEnteredFormat.backgroundColor')
+  }
+  if (textColor) {
+    if (!isNone(textColor)) format.textFormat = { foregroundColor: hexToColor(textColor) }
+    fields.push('userEnteredFormat.textFormat.foregroundColor')
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        repeatCell: {
+          range: { sheetId: target.sheetId, ...grid },
+          cell: { userEnteredFormat: format },
+          fields: fields.join(','),
+        },
+      }],
+    },
+  })
+
+  return {
+    spreadsheetId,
+    sheet: target.title,
+    range: `${target.title}!${range.includes('!') ? range.slice(range.lastIndexOf('!') + 1) : range}`,
+    ...(backgroundColor ? { backgroundColor } : {}),
+    ...(textColor ? { textColor } : {}),
+  }
+}
+
+/** Convert a Sheets Color object to "#RRGGBB" (undefined stays undefined). */
+function colorToHex(c) {
+  if (!c) return undefined
+  return '#' + ['red', 'green', 'blue']
+    .map(k => Math.round((c[k] || 0) * 255).toString(16).padStart(2, '0'))
+    .join('').toUpperCase()
+}
+
+/**
+ * Read cell values WITH their formatting (fill color, text color, bold) for a range.
+ * Companion to readSheetRange, which returns values only. Reports userEnteredFormat,
+ * i.e. what was set directly on the cell (conditional-formatting results are not included).
+ *
+ * @param {string} spreadsheetId
+ * @param {string} range - A1 range, e.g. "Main!A1:K5". Tab defaults to the first tab if omitted.
+ * @param {boolean} [onlyFormatted=false] - If true, return only cells that carry a color or bold.
+ */
+export async function readSheetFormat(auth, spreadsheetId, range, onlyFormatted = false) {
+  const sheets = google.sheets({ version: 'v4', auth })
+  const { tab } = parseA1Range(range)
+  const target = await resolveSheetProps(sheets, spreadsheetId, tab)
+  const ref = range.includes('!') ? range.slice(range.lastIndexOf('!') + 1) : range
+  const fullRange = `'${target.title.replace(/'/g, "''")}'!${ref}`
+
+  const { data } = await sheets.spreadsheets.get({
+    spreadsheetId,
+    ranges: [fullRange],
+    includeGridData: true,
+    fields: 'sheets.data(startRow,startColumn,rowData.values(formattedValue,userEnteredFormat(backgroundColor,textFormat(foregroundColor,bold))))',
+  })
+
+  const grid = data.sheets?.[0]?.data?.[0] || {}
+  const startRow = grid.startRow || 0
+  const startCol = grid.startColumn || 0
+  const rows = []
+  ;(grid.rowData || []).forEach((r, ri) => {
+    const rowNum = startRow + ri + 1
+    const cells = []
+    ;(r.values || []).forEach((v, ci) => {
+      const fmt = v.userEnteredFormat || {}
+      const cell = {
+        cell: `${indexToColumn(startCol + ci)}${rowNum}`,
+        value: v.formattedValue ?? '',
+      }
+      const bg = colorToHex(fmt.backgroundColor)
+      const fg = colorToHex(fmt.textFormat?.foregroundColor)
+      // A plain white fill / black text is the default look; report it only when it differs.
+      if (bg && bg !== '#FFFFFF') cell.backgroundColor = bg
+      if (fg && fg !== '#000000') cell.textColor = fg
+      if (fmt.textFormat?.bold) cell.bold = true
+      const formatted = cell.backgroundColor || cell.textColor || cell.bold
+      if (!onlyFormatted || formatted) cells.push(cell)
+    })
+    if (cells.length) rows.push({ row: rowNum, cells })
+  })
+
+  return { spreadsheetId, sheet: target.title, range: `${target.title}!${ref}`, rows }
+}
