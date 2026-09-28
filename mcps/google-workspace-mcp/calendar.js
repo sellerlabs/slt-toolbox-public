@@ -80,7 +80,7 @@ export async function createCalendarEvent(auth, { title, start, end, description
 
 /**
  * Update an existing calendar event.
- * `updates` is a partial object with any of: title, start, end, description, attendees
+ * `updates` is a partial object with any of: title, start, end, description, location, attendees
  */
 export async function updateCalendarEvent(auth, eventId, updates) {
   const calendar = google.calendar({ version: 'v3', auth })
@@ -93,6 +93,7 @@ export async function updateCalendarEvent(auth, eventId, updates) {
   const updated = { ...existing }
   if (updates.title) updated.summary = updates.title
   if (updates.description !== undefined) updated.description = updates.description
+  if (updates.location !== undefined) updated.location = updates.location
   if (updates.start) updated.start = { dateTime: new Date(updates.start).toISOString(), timeZone: 'UTC' }
   if (updates.end) updated.end = { dateTime: new Date(updates.end).toISOString(), timeZone: 'UTC' }
   if (updates.attendees) updated.attendees = updates.attendees.map((email) => ({ email }))
@@ -101,6 +102,7 @@ export async function updateCalendarEvent(auth, eventId, updates) {
     calendarId: 'primary',
     eventId,
     requestBody: updated,
+    sendUpdates: updates.attendees ? 'all' : 'none',
   })
 
   return formatEvent(data)

@@ -1,0 +1,40 @@
+{
+  "_comment": "Example schedule queue for the task-scheduler engine. Copy to schedule.json and edit. The running scheduler re-reads this file, so you can add/remove/enable tasks without restarting it. `type: claude` runs a Claude Code CLI prompt from instructionFile; `type: command` runs a shell command. Times are cron (server local time). Replace projectRoot with your own workspace absolute path.",
+  "settings": {
+    "projectRoot": "C:\\path\\to\\your\\workspace",
+    "logRetentionDays": 30
+  },
+  "tasks": [
+    {
+      "name": "example-claude-task",
+      "description": "Example: run a Claude prompt from a markdown instruction file every morning at 7am.",
+      "type": "claude",
+      "cron": "0 7 * * *",
+      "enabled": false,
+      "model": "sonnet",
+      "instructionFile": "path/to/Your-Task-Instructions.md",
+      "maxTurns": 20,
+      "timeout": 300000
+    },
+    {
+      "name": "example-command-task",
+      "description": "Example: run a shell command on a schedule (here, every 6 hours).",
+      "type": "command",
+      "cron": "0 */6 * * *",
+      "enabled": false,
+      "command": "node \"C:\\path\\to\\your\\script.js\"",
+      "cwd": "C:\\path\\to\\your",
+      "timeout": 300000
+    },
+    {
+      "name": "example-watchdog",
+      "description": "Example: keep a long-running process alive; cron every minute, engine no-ops if already running.",
+      "type": "command",
+      "cron": "* * * * *",
+      "enabled": false,
+      "command": "wscript.exe \"C:\\path\\to\\your\\start-something.vbs\"",
+      "cwd": "C:\\path\\to\\your",
+      "timeout": 0
+    }
+  ]
+}

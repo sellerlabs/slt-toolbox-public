@@ -33,6 +33,12 @@ Everything here is credential-free. You bring your own tokens, and nothing in th
 
 Copy the `.md` files into your `.claude/commands/`, and the `agents/` files into your `.claude/agents/`.
 
+### Apps (`apps/`)
+
+| App | What it does |
+|---|---|
+| `task-scheduler` | Runs Claude Code headless tasks and shell commands on cron from a hot-reloaded `schedule.json` (no restart per change), with missed-run catch-up, one-time `runAt` jobs, transient-error retry and Slack failure alerts. Windows only. See its [README](apps/task-scheduler/README.md). |
+
 ## Getting started
 
 ```bash

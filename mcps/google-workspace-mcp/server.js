@@ -18,7 +18,7 @@ import { homedir } from 'os'
 
 const ATTACHMENT_ALLOWED_DIRS = [
   resolvePath(homedir(), 'Downloads'),
-  resolvePath(homedir(), 'OneDrive', 'SLT-App', 'Agent-Code', 'temp'),
+  ...(process.env.GOOGLE_WORKSPACE_EXTRA_SAVE_DIR ? [resolvePath(process.env.GOOGLE_WORKSPACE_EXTRA_SAVE_DIR)] : []),
   resolvePath(process.env.TEMP || resolvePath(homedir(), 'AppData', 'Local', 'Temp')),
 ]
 
@@ -343,7 +343,8 @@ server.tool(
     start: z.string().optional().describe('New start datetime (ISO 8601)'),
     end: z.string().optional().describe('New end datetime (ISO 8601)'),
     description: z.string().optional().describe('New description'),
-    attendees: z.array(z.string()).optional().describe('New attendee email list (replaces existing)'),
+    location: z.string().optional().describe('New location'),
+    attendees: z.array(z.string()).optional().describe('New attendee email list (replaces existing; notifies all attendees)'),
     account: z.string().describe('Account nickname, email, or alias that owns this event (required)'),
   },
   async ({ eventId, account, ...updates }) => {

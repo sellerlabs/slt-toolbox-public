@@ -1,0 +1,12 @@
+{
+  "name": "claude-task-scheduler",
+  "version": "1.0.0",
+  "description": "Cron-like scheduler for Claude Code headless tasks and general commands",
+  "main": "scheduler.js",
+  "scripts": {
+    "start": "node scheduler.js"
+  },
+  "dependencies": {
+    "node-cron": "^3.0.3"
+  }
+}
