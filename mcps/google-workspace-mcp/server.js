@@ -18,7 +18,7 @@ import { homedir } from 'os'
 
 const ATTACHMENT_ALLOWED_DIRS = [
   resolvePath(homedir(), 'Downloads'),
-  resolvePath(homedir(), 'OneDrive', 'SLT App', 'Claude Code', 'temp'),
+  resolvePath(homedir(), 'OneDrive', 'SLT-App', 'Agent-Code', 'temp'),
   resolvePath(process.env.TEMP || resolvePath(homedir(), 'AppData', 'Local', 'Temp')),
 ]
 
