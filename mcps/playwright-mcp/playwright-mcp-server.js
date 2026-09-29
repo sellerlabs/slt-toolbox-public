@@ -160,6 +160,8 @@ function uniquePath(dir, base, ext) {
 function repairSavedDownloadExtension(savedPath) {
   try {
     if (!savedPath || !fs.existsSync(savedPath)) return savedPath;
+    // Extensionless FOLDERS in Downloads also fire the watcher; reading one threw EISDIR.
+    if (!fs.statSync(savedPath).isFile()) return savedPath;
     const parsed = path.parse(savedPath);
     if (parsed.ext) return savedPath; // already has an extension
     const ext = sniffExtension(readHead(savedPath));

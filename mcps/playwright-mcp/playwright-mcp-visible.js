@@ -92,9 +92,13 @@ async function ensureServer() {
     // ExecutionTimeLimit 0 = never auto-kill the long-lived server.
     // AllowStartIfOnBatteries/-DontStopIfGoingOnBatteries: laptop power state must
     // not terminate it.
+    // Priority 4 = Normal. Task Scheduler's default (7) is BelowNormal, which node
+    // and Chrome inherit through wscript. With the CPU pegged (OneDrive resync,
+    // 2026-09-28) a BelowNormal launch starved: wscript sat with no node child for
+    // minutes and one startup took 12 min, while shell launches started in 1s.
     const settings = `New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries ` +
       `-DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) ` +
-      `-MultipleInstances IgnoreNew`;
+      `-MultipleInstances IgnoreNew -Priority 4`;
     const psCommand =
       `$ErrorActionPreference='Stop'; ` +
       `$a = ${action}; $p = ${principal}; $s = ${settings}; ` +
