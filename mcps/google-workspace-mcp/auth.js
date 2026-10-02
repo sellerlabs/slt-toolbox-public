@@ -18,7 +18,8 @@
 // built here is a different class than the one the API client expects and every call
 // fails with a misleading "Login Required." even though the token is valid and
 // unexpired (verified 2026-08-11: getAccessToken() succeeded, the call still failed).
-// `"overrides": { "google-auth-library": "^10.5.0" }` collapses them to one copy.
+// `"overrides": { "google-auth-library": "$google-auth-library" }` collapses them to one
+// copy (standalone installs); inside the Tools/ workspace the root override does it.
 import { OAuth2Client } from 'google-auth-library'
 const google = { auth: { OAuth2: OAuth2Client } }
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'fs'
