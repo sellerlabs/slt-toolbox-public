@@ -375,18 +375,32 @@ foreach ($proc in $chromes) {
  *   create its own fresh page via newPage().
  */
 /**
- * Wraps a Playwright Page so that screenshot() calls bringToFront() first.
- * This ensures the correct tab is focused when multiple sessions share one
- * Chrome window — otherwise screenshot() captures whichever tab is active.
+ * Wraps a Playwright Page so automation never steals the active tab from the user
+ * (2026-10-02). CDP captureScreenshot and aria snapshots are per-target and work
+ * on background tabs (Playwright's focus emulation keeps them "visible"), so:
+ *   - screenshot() runs in place; only if it fails does it front the tab and retry.
+ *   - bringToFront() is a no-op, which neutralizes upstream browser_tabs select.
+ *   - forceBringToFront() is the real one, for browser_run_code when truly needed.
  */
 function wrapPageWithBringToFront(page) {
   return new Proxy(page, {
     get(target, prop) {
       if (prop === 'screenshot') {
         return async (...args) => {
-          await target.bringToFront();
-          return target.screenshot(...args);
+          try {
+            return await target.screenshot(...args);
+          } catch (e) {
+            process.stderr.write(`[playwright-mcp-server] Background screenshot failed, fronting tab and retrying: ${e.message.split('\n')[0]}\n`);
+            await target.bringToFront();
+            return target.screenshot(...args);
+          }
         };
+      }
+      if (prop === 'bringToFront') {
+        return async () => {};
+      }
+      if (prop === 'forceBringToFront') {
+        return () => target.bringToFront();
       }
       const val = target[prop];
       return typeof val === 'function' ? val.bind(target) : val;
@@ -411,6 +425,16 @@ function createSessionContextFactory(getSharedContext) {
       // preventing listener accumulation across closeBrowserContext()/re-init cycles.
       const registeredPageListeners = [];
 
+      // Wrap + register a page this session created, once. Called from both the
+      // 'page' event (fires first) and newPage()'s return so both see one wrapper.
+      const trackOwnPage = page => {
+        if (ownPages.has(page)) return ownPages.get(page);
+        const wrapped = wrapPageWithBringToFront(page);
+        ownPages.set(page, wrapped);
+        page.on('close', () => ownPages.delete(page));
+        return wrapped;
+      };
+
       const sessionCtx = new Proxy(sharedContext, {
         get(target, prop) {
           // Return only this session's pages — prevents Context from adopting
@@ -427,10 +451,7 @@ function createSessionContextFactory(getSharedContext) {
               creatingPage = true;
               try {
                 const page = await target.newPage(...args);
-                const wrapped = wrapPageWithBringToFront(page);
-                ownPages.set(page, wrapped);
-                page.on('close', () => ownPages.delete(page));
-                return wrapped;
+                return trackOwnPage(page);
               } finally {
                 creatingPage = false;
               }
@@ -452,7 +473,9 @@ function createSessionContextFactory(getSharedContext) {
               if (event === 'page') {
                 const wrapped = async page => {
                   if (creatingPage) {
-                    handler(page);
+                    // Hand upstream the WRAPPED page: its Tab objects are built from
+                    // this event, so a raw page here bypassed the wrapper entirely.
+                    handler(trackOwnPage(page));
                     return;
                   }
                   let opener = null;

@@ -239,6 +239,23 @@ function resolveDopplerBin() {
 // Cached across all task runs — fetched lazily on first use, then reused for the
 // lifetime of the scheduler process. Returns {} on any failure (logged, non-fatal):
 // a Doppler outage must not take down every scheduled task.
+// SLACK_BOT_TOKEN was moved OUT of Doppler and back into this plain .env file on
+// 2026-06-25 (low-sensitivity, easy to rotate -- see the comment in that .env).
+// getDopplerSecrets() only reads Doppler, so it never has this key; read it
+// directly from the same file DOPPLER_TOKEN already comes from.
+let _slackBotToken = null;
+function getSlackBotToken() {
+  if (_slackBotToken !== null) return _slackBotToken;
+  try {
+    const env = fs.readFileSync(SLACK_ENV_PATH, 'utf8');
+    const m = env.match(/^SLACK_BOT_TOKEN=(.+)/m);
+    _slackBotToken = m ? m[1].trim() : '';
+  } catch {
+    _slackBotToken = '';
+  }
+  return _slackBotToken;
+}
+
 let _dopplerSecrets = null;
 function getDopplerSecrets() {
   if (_dopplerSecrets) return _dopplerSecrets;
@@ -354,11 +371,9 @@ function sleep(ms) {
 function notifyTaskFailure(taskName, reason, logPath) {
   return new Promise((resolve) => {
     try {
-      const token = process.env.SLACK_BOT_TOKEN || getDopplerSecrets().SLACK_BOT_TOKEN;
-      const alertChannel = process.env.SLACK_ALERT_CHANNEL || getDopplerSecrets().SLACK_ALERT_CHANNEL;
-      const alertUsername = process.env.SLACK_ALERT_USERNAME || getDopplerSecrets().SLACK_ALERT_USERNAME;
-      if (!token || !alertChannel) {
-        logScheduler(`!!! ${taskName} failed but SLACK_BOT_TOKEN or SLACK_ALERT_CHANNEL is not set — alert NOT sent`);
+      const token = process.env.SLACK_BOT_TOKEN || getSlackBotToken() || getDopplerSecrets().SLACK_BOT_TOKEN;
+      if (!token) {
+        logScheduler(`!!! ${taskName} failed but no SLACK_BOT_TOKEN available — alert NOT sent`);
         return resolve();
       }
       const text = [
@@ -511,6 +526,7 @@ async function executeTask(task, config) {
   for (const [k, v] of Object.entries(getDopplerSecrets())) {
     if (env[k] === undefined) env[k] = v;
   }
+  if (env.SLACK_BOT_TOKEN === undefined && getSlackBotToken()) env.SLACK_BOT_TOKEN = getSlackBotToken();
   // NEVER let ANTHROPIC_API_KEY reach a spawned `claude` process. When it is set,
   // the Claude CLI bills to pay-as-you-go API rates instead of the subscription.
   // From 2026-06-23 (when Doppler injection landed) to 2026-07-26 this quietly put
