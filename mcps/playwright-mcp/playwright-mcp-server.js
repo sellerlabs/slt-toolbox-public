@@ -625,6 +625,17 @@ async function main() {
         // extension-repair watcher. Both are best-effort (non-fatal on failure).
         startDownloadsWatcher();
         await routeChromeDownloads(sharedContext);
+        // Label Chrome's startup tab so it doesn't read as a leaked blank tab. It
+        // anchors download routing and keeps Chrome alive when session tabs close.
+        const [startupTab] = sharedContext.pages();
+        if (startupTab && startupTab.url() === 'about:blank') {
+          await startupTab.setContent(
+            '<title>Claude browser: keep this tab open</title>' +
+            '<body style="font:16px system-ui;margin:40px;color:#444">' +
+            '<h2>Keep this tab open</h2><p>This tab keeps the shared Claude browser running and routes downloads. ' +
+            'Claude opens its own tabs next to it. Closing every tab shuts Chrome down.</p></body>'
+          ).catch(e => process.stderr.write(`[playwright-mcp-server] Startup tab label failed (non-fatal): ${e.message}\n`));
+        }
         sharedContext.on('close', () => {
           process.stderr.write('[playwright-mcp-server] Chrome closed — will relaunch on next tool call\n');
           sharedContext = null;
