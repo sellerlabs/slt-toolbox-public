@@ -36,21 +36,38 @@ A global install (`npm install -g @playwright/mcp`) also works: every entry poin
 
 ### 2. Register with your MCP client
 
-**Claude Code** (`~/.claude.json` or project `.mcp.json`):
+Use the **absolute path** to `playwright-mcp-visible.js` in every client. MCP clients do not reliably start the server from this folder, so a bare filename fails to resolve. On Windows, write the path with forward slashes (`C:/path/to/playwright-mcp/...`) or escaped backslashes in JSON.
+
+**Claude Code** (CLI, user scope so it works in every project):
+
+```bash
+claude mcp add --scope user playwright-visible -- node --use-system-ca /absolute/path/to/playwright-mcp/playwright-mcp-visible.js
+```
+
+Or by hand in `~/.claude.json` or a project `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "playwright-visible": {
       "command": "node",
-      "args": ["--use-system-ca", "playwright-mcp-visible.js"],
-      "cwd": "/absolute/path/to/playwright-mcp"
+      "args": ["--use-system-ca", "/absolute/path/to/playwright-mcp/playwright-mcp-visible.js"]
     }
   }
 }
 ```
 
-**OpenClaw** (`openclaw.json`) uses the identical stdio format.
+**Codex** (CLI, writes `~/.codex/config.toml`):
+
+```bash
+codex mcp add playwright-visible -- node --use-system-ca /absolute/path/to/playwright-mcp/playwright-mcp-visible.js
+```
+
+**OpenClaw** (`openclaw.json`) uses the same stdio `command` + `args` format as Claude Code.
+
+Restart the client (or start a new session) after registering.
+
+**Windows:** visible mode registers a per-user Scheduled Task named `PlaywrightMcpSharedServer` on first use. It runs as you with no elevation, so no admin rights or UAC prompt are needed.
 
 On the first tool call, the shared browser server auto-launches on port `3456` and a visible Chrome window opens. Subsequent sessions attach to the same server.
 
