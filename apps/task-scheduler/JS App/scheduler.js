@@ -305,7 +305,7 @@ function buildClaudeArgs(task, config) {
   // CLAUDE_BIN is resolved to an absolute path (quoted in case it contains spaces)
   // so the spawn never relies on the inherited PATH of the restarting shell.
   const claudeBin = CLAUDE_BIN.includes(' ') ? `"${CLAUDE_BIN}"` : CLAUDE_BIN;
-  const command = `${claudeBin} -p "${escapedPrompt}" --settings .claude/settings.scheduled.json --max-turns ${maxTurns}${modelFlag}`;
+  const command = `${claudeBin} -p "${escapedPrompt}" --settings .claude/scripts/settings.scheduled.json --max-turns ${maxTurns}${modelFlag}`;
   return {
     command,
     args: [],
