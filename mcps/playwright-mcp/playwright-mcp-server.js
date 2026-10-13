@@ -25,7 +25,8 @@
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
+const http = require('http');
 
 // ── stderr tee ───────────────────────────────────────────────────────────────
 // On Windows the bridge starts this server via a Scheduled Task with
@@ -304,6 +305,35 @@ async function routeChromeDownloads(context) {
   } catch (e) {
     process.stderr.write(`[playwright-mcp-server] Failed to route Chrome downloads via CDP (non-fatal): ${e.message}\n`);
   }
+}
+
+// ── Chrome spawn helpers ─────────────────────────────────────────────────────
+
+function findChromeExecutable() {
+  const candidates = process.platform === 'darwin'
+    ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+    : [
+        path.join(process.env['PROGRAMFILES'] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      ];
+  const found = candidates.find(c => fs.existsSync(c));
+  if (!found) throw new Error('Google Chrome not found in: ' + candidates.join(', '));
+  return found;
+}
+
+function waitForCdpPort(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      http.get(`http://127.0.0.1:${port}/json/version`, res => { res.resume(); resolve(); })
+        .on('error', () => {
+          if (Date.now() > deadline) reject(new Error(`Chrome debug port ${port} not ready after ${timeoutMs}ms`));
+          else setTimeout(attempt, 200);
+        });
+    };
+    attempt();
+  });
 }
 
 // ── Locate @playwright/mcp installation ──────────────────────────────────────
@@ -598,6 +628,7 @@ async function main() {
   // This prevents Chrome from popping up every time a Claude Code session starts.
   let sharedContext = null;
   let chromeLaunching = null;
+  let chromeProcess = null;
 
   async function getSharedContext() {
     if (sharedContext) return sharedContext;
@@ -606,20 +637,37 @@ async function main() {
       chromeLaunching = (async () => {
         await killStaleChrome(userDataDir);
         process.stderr.write('[playwright-mcp-server] Launching Chrome (first tool use)...\n');
-        sharedContext = await playwright.chromium.launchPersistentContext(userDataDir, {
-          channel: 'chrome',
-          headless: false,
-          handleSIGINT: false,
-          handleSIGTERM: false,
-          // Chrome owns downloads (routed via CDP Browser.setDownloadBehavior to
-          // downloadsDir, then renamed by the fs watcher). Do NOT let Playwright
-          // also intercept downloads — acceptDownloads:true makes _downloadStarted
-          // race Chrome for the same artifact and crash with ENOENT.
-          acceptDownloads: false,
-          ignoreDefaultArgs: ['--disable-extensions', '--enable-automation'],
-          args: ['--disable-blink-features=AutomationControlled', `--remote-debugging-port=${CDP_PORT}`],
-          viewport: null,
+        // Spawn Chrome ourselves and attach over the TCP debug port, instead of
+        // launchPersistentContext (2026-10-12). On this profile, a Playwright pipe
+        // launch made Chrome hit a CHECK ~10s after startup, every time (dumps in
+        // Crashpad/reports). The same flags with a TCP port + connectOverCDP stay up;
+        // a fresh profile under launchPersistentContext also stays up. Details in
+        // playwright-mcp-Context.md.
+        // Mirrors the old launch's flags: Playwright's default switches minus
+        // --disable-extensions / --enable-automation (the old ignoreDefaultArgs).
+        const { chromiumSwitches } = require(path.join(path.dirname(require.resolve('playwright-core/package.json', { paths: [playwrightDir] })), 'lib/server/chromium/chromiumSwitches'));
+        const chromeArgs = [
+          ...chromiumSwitches(undefined, 'chrome').filter(a => a && a !== '--disable-extensions' && a !== '--enable-automation'),
+          '--disable-blink-features=AutomationControlled',
+          `--remote-debugging-port=${CDP_PORT}`,
+          `--user-data-dir=${userDataDir}`,
+          // Without it Chrome can open the profile picker instead of a browser window.
+          '--profile-directory=Default',
+          'about:blank',
+        ];
+        chromeProcess = spawn(findChromeExecutable(), chromeArgs, { stdio: 'ignore' });
+        chromeProcess.on('exit', code => {
+          process.stderr.write(`[playwright-mcp-server] Chrome process exited (code ${code})\n`);
+          chromeProcess = null;
         });
+        await waitForCdpPort(CDP_PORT, 30000);
+        const browser = await playwright.chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+        // Note: a connectOverCDP default context reports acceptDownloads 'accept'
+        // (was false). routeChromeDownloads() below still sets browser-wide
+        // behavior 'allow' to downloadsDir, and the built-in save is try/catch
+        // guarded, so Chrome keeps owning downloads.
+        sharedContext = browser.contexts()[0];
+        browser.on('disconnected', () => sharedContext && sharedContext.emit('close'));
         process.stderr.write('[playwright-mcp-server] Chrome launched\n');
         // Route Chrome's native downloads into the watched folder + start the
         // extension-repair watcher. Both are best-effort (non-fatal on failure).
@@ -667,7 +715,8 @@ async function main() {
   // Graceful shutdown
   process.on('SIGINT', async () => {
     process.stderr.write('[playwright-mcp-server] Shutting down...\n');
-    if (sharedContext) await sharedContext.close().catch(() => {});
+    // connectOverCDP's close() only disconnects; end the Chrome we spawned.
+    if (chromeProcess) chromeProcess.kill();
     process.exit(0);
   });
 }
