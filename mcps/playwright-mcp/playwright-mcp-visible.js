@@ -309,7 +309,24 @@ function connectSSE(onClose) {
   });
 }
 
+// The server's CWD is project-root temp/, so a caller-supplied `temp/foo.png` resolves to
+// temp/temp/foo.png and the follow-up read/upload fails ENOENT. The caller rule (bare
+// filenames) kept getting broken (8 hits 2026-09-14, 7 more 2026-10-12), so strip the
+// redundant prefix here instead. Absolute paths are left alone.
+const TEMP_PREFIX = /^(\.[\\/])?temp[\\/]+/i;
+function stripTempPrefix(p) {
+  return typeof p === 'string' && !path.isAbsolute(p) ? p.replace(TEMP_PREFIX, '') : p;
+}
+function normalizeArtifactPaths(msg) {
+  const args = msg && msg.method === 'tools/call' && msg.params && msg.params.arguments;
+  if (!args) return msg;
+  if ('filename' in args) args.filename = stripTempPrefix(args.filename);
+  if (Array.isArray(args.paths)) args.paths = args.paths.map(stripTempPrefix);
+  return msg;
+}
+
 function postMessage(endpoint, msg) {
+  normalizeArtifactPaths(msg);
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(msg);
     const u = new URL(endpoint);

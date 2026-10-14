@@ -365,19 +365,16 @@ async function killStaleChrome(profileDir) {
   try {
     const psScript = `
 $pattern = '*${path.basename(profileDir)}*'
-$chromes = Get-Process -Name chrome -ErrorAction SilentlyContinue
-foreach ($proc in $chromes) {
-  try {
-    $wmi = Get-WmiObject Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction SilentlyContinue
-    if ($wmi -and $wmi.CommandLine -like $pattern) {
-      Write-Output $proc.Id
-    }
-  } catch {}
-}
+# One CIM query for all chrome.exe (2026-10-13). The old per-process WMI loop
+# blew the timeout with many Chromes open, so a stale browser survived and the
+# relaunch died on the profile lock (exit 21).
+Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -like $pattern } |
+  ForEach-Object { Write-Output $_.ProcessId }
 `.trim();
     const psFile = path.join(os.tmpdir(), 'pw-kill-chrome.ps1');
     fs.writeFileSync(psFile, psScript, 'utf8');
-    const result = execSync(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { encoding: 'utf8', timeout: 8000, windowsHide: true }).trim();
+    const result = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psFile}"`, { encoding: 'utf8', timeout: 20000, windowsHide: true }).trim();
     fs.unlinkSync(psFile);
     const pids = result.split(/\r?\n/).map(s => s.trim()).filter(s => /^\d+$/.test(s));
     if (pids.length > 0) {
@@ -386,7 +383,7 @@ foreach ($proc in $chromes) {
       await new Promise(r => setTimeout(r, 1500));
     }
   } catch (e) {
-    // Non-fatal — launchPersistentContext has its own retry logic for exitCode=21
+    // Non-fatal: getSharedContext() retries once if Chrome exits 21 (profile lock)
     process.stderr.write(`[playwright-mcp-server] Stale Chrome check failed (non-fatal): ${e.message}\n`);
   }
 }
@@ -655,12 +652,31 @@ async function main() {
           '--profile-directory=Default',
           'about:blank',
         ];
-        chromeProcess = spawn(findChromeExecutable(), chromeArgs, { stdio: 'ignore' });
-        chromeProcess.on('exit', code => {
-          process.stderr.write(`[playwright-mcp-server] Chrome process exited (code ${code})\n`);
-          chromeProcess = null;
-        });
-        await waitForCdpPort(CDP_PORT, 30000);
+        // Resolves when the debug port answers; rejects early if Chrome exits first.
+        const spawnChrome = () => {
+          const proc = spawn(findChromeExecutable(), chromeArgs, { stdio: 'ignore' });
+          chromeProcess = proc;
+          const exited = new Promise((_, reject) => proc.on('exit', code => {
+            process.stderr.write(`[playwright-mcp-server] Chrome process exited (code ${code})\n`);
+            if (chromeProcess === proc) chromeProcess = null;
+            const err = new Error(`Chrome exited (code ${code}) before its debug port was ready`);
+            err.exitCode = code;
+            reject(err);
+          }));
+          exited.catch(() => {});
+          return Promise.race([waitForCdpPort(CDP_PORT, 30000), exited]);
+        };
+        try {
+          await spawnChrome();
+        } catch (e) {
+          // 21 = profile still locked by a leftover Chrome. The old
+          // launchPersistentContext retried this itself; the spawn path must too.
+          if (e.exitCode !== 21) throw e;
+          process.stderr.write('[playwright-mcp-server] Profile locked (exit 21), killing stale Chrome and retrying once\n');
+          await killStaleChrome(userDataDir);
+          await new Promise(r => setTimeout(r, 2000));
+          await spawnChrome();
+        }
         const browser = await playwright.chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
         // Note: a connectOverCDP default context reports acceptDownloads 'accept'
         // (was false). routeChromeDownloads() below still sets browser-wide
@@ -690,7 +706,15 @@ async function main() {
           chromeLaunching = null;
         });
         chromeLaunching = null;
-      })();
+      })().catch(e => {
+        // Clear the in-flight launch so the NEXT tool call retries. Without this a
+        // single failed launch stuck every later call until a server restart
+        // (2026-10-13).
+        process.stderr.write(`[playwright-mcp-server] Chrome launch failed: ${e.message}\n`);
+        sharedContext = null;
+        chromeLaunching = null;
+        throw e;
+      });
     }
     await chromeLaunching;
     return sharedContext;

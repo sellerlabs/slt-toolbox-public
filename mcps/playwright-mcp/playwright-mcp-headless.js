@@ -12,6 +12,13 @@ fs.mkdirSync(userDataDir, { recursive: true });
 // artifacts never land in Tools/Playwright. __dirname = Tools/Playwright, root is two up.
 const outputDir = path.join(__dirname, '..', '..', 'temp');
 
+// --output-dir alone is not enough: upstream resolves a relative `filename` against the
+// process CWD, and lazy-hub spawns this child with CWD = %TEMP%, so bare names landed in
+// C:\Users\<u>\AppData\Local\Temp\temp (2026-10-12 process review). Match the other two
+// launchers and force CWD to project-root temp/.
+fs.mkdirSync(outputDir, { recursive: true });
+process.chdir(outputDir);
+
 // Windows + system Chrome: run a REAL headed Chrome parked off-screen instead of true
 // headless. Akamai/PerimeterX (Home Depot, Ferguson, AJ Madison) 403 every headless
 // variant, incl. system Chrome headless + UA override + warmed cookies, but pass a
