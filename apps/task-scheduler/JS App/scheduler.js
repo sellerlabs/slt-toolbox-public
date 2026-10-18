@@ -351,6 +351,11 @@ const TRANSIENT_API_PATTERN = /overloaded_error|rate_limit_error|API Error:\s*(4
 // healthy runs legitimately report things like "0 failed".
 const SELF_REPORTED_FAILURE_PATTERN = /still connecting|tools (?:were|are) unavailable|MCP (?:server|tools?) (?:is |are |was |were )?(?:not |un)available|tools? (?:is|are|were) not available|no \S+ tools? (?:are|were) (?:discoverable|available)|not discoverable through it|unable to complete|could not run|could not complete|no accounts were checked|giving up|aborting the run|the slack gate blocked|slack (?:post|message) (?:is|was) gated|posting outside [^\n]{0,60}needs your explicit go-ahead|approve-slack-post/i;
 
+// A 429 that means "out of money" is permanent: retrying only re-runs the pipeline
+// after its earlier stages already committed (2026-10-17: the retry found 0 new videos,
+// posted "No new videos today" and logged the run green, hiding the podcast failure).
+const NON_RETRYABLE_PATTERN = /credit_balance_exhausted|insufficient_quota|no credits remaining/i;
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -424,6 +429,7 @@ function notifyTaskFailure(taskName, reason, logPath) {
 function runOnce(task, spawnConfig, env, logPath) {
   return new Promise((resolve) => {
     let sawTransientError = false;
+    let sawNonRetryable = false;
     let killedByTimeout = false;
     let sawStdout = false;
     let sawSelfReportedFailure = false;
@@ -450,6 +456,7 @@ function runOnce(task, spawnConfig, env, logPath) {
 
     const handleData = (isStdout) => (data) => {
       const text = data.toString();
+      if (NON_RETRYABLE_PATTERN.test(text)) sawNonRetryable = true;
       if (TRANSIENT_API_PATTERN.test(text)) sawTransientError = true;
       if (SELF_REPORTED_FAILURE_PATTERN.test(text)) sawSelfReportedFailure = true;
       // A `claude -p` task's final report goes to stdout. If the child produced
@@ -472,7 +479,7 @@ function runOnce(task, spawnConfig, env, logPath) {
         resolve({ exitCode: 0, sawTransientError, sawSelfReportedFailure });
         return;
       }
-      resolve({ exitCode: code !== null ? code : 1, sawTransientError, sawSelfReportedFailure });
+      resolve({ exitCode: code !== null ? code : 1, sawTransientError: sawTransientError && !sawNonRetryable, sawSelfReportedFailure });
     });
 
     child.on('error', (err) => {
