@@ -555,6 +555,7 @@ async function executeTask(task, config) {
     // by the model it exempts. Scheduled tasks are still confined to the channels
     // listed in slackApprovalGate.scheduledChannels.
     env.CLAUDE_SCHEDULED_RUN = '1';
+    logScheduler(`${task.name} auth: ${env.CLAUDE_CODE_OAUTH_TOKEN ? 'CLAUDE_CODE_OAUTH_TOKEN injected' : '!!! NO CLAUDE_CODE_OAUTH_TOKEN (falls back to /login credentials)'}`);
   }
 
   // Retry-with-backoff config. Only retries on transient API errors (529/503/429/overloaded).

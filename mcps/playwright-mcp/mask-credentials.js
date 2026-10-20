@@ -110,11 +110,44 @@ function hasCredentialContext(lines, i, indent) {
   return false;
 }
 
+// Secrets shorter than this are not scrubbed from the rest of the text: a 2-3
+// char value would blank common substrings everywhere. The field line itself is
+// still masked regardless of length.
+const MIN_ECHO_LEN = 4;
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Pass 2: remove every remaining echo of each detected secret. Chromium names a
+ * row/cell from its descendant text INCLUDING input values, so a layout-table
+ * login page repeats the password in every ancestor name (Fulton County water
+ * portal, 2026-10-19). Detection stays field-shape based; the value is used only
+ * to scrub its own copies. The escaped forms cover names Playwright quotes with
+ * backslash escapes (secret contains `"` or `\`) and the YAML single-quoted
+ * wrapper it puts around row/cell lines containing a colon (`'` doubled).
+ */
+function scrubEchoes(text, secrets) {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret.length < MIN_ECHO_LEN) continue;
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    const forms = [secret, escaped];
+    const variants = new Set([...forms, ...forms.map(f => f.replace(/'/g, "''"))]);
+    for (const v of variants) {
+      out = out.replace(new RegExp(escapeRegExp(v), 'g'), MASK);
+    }
+  }
+  return out;
+}
+
 function maskCredentials(text) {
   if (!text || typeof text !== 'string') return text;
   if (!new RegExp(VALUE_ROLES, 'i').test(text)) return text;
 
   const lines = text.split('\n');
+  const secrets = new Set();
   let changed = false;
 
   for (let i = 0; i < lines.length; i++) {
@@ -134,10 +167,11 @@ function maskCredentials(text) {
     // Replace only the value tail, so structure and [ref=] survive.
     const head = lines[i].slice(0, lines[i].lastIndexOf(value)).replace(/:\s*$/, '');
     lines[i] = head + ': ' + MASK;
+    secrets.add(value.trim());
     changed = true;
   }
 
-  return changed ? lines.join('\n') : text;
+  return changed ? scrubEchoes(lines.join('\n'), secrets) : text;
 }
 
 /**
@@ -172,13 +206,15 @@ function maskJsonRpcLine(line) {
  * an in-process seam upstream does not guarantee, so verify at startup that the
  * mask still behaves rather than discovering a silent bypass during an incident.
  *
- * Three probes, because the mask has three ways to fail and each is a separate
+ * Four probes, because the mask has four ways to fail and each is a separate
  * incident:
  *   labeled   - the original 2026-08-04 Bluevine case.
  *   unlabeled - the 2026-08-21 DocHub case: no accessible name, credential
  *               intent only in the surrounding tree.
  *   utility   - the guard against "fix" it by masking everything, which would
  *               make snapshots useless rather than safe.
+ *   ancestor  - the 2026-10-19 Fulton County case: the field line was masked
+ *               but row/cell names above it echoed the plaintext.
  * Returns true on pass; writes to stderr and returns false on failure.
  */
 function selfTest(label) {
@@ -213,12 +249,28 @@ function selfTest(label) {
                     utility.includes('blue widgets') &&
                     utility.includes('42');
 
-  const ok = labeledOk && unlabeledOk && utilityOk;
+  // The 2026-10-19 Fulton County water portal case: a DotNetNuke layout-table
+  // login page. Chromium names each row/cell from its descendant text INCLUDING
+  // input values, so the field line was masked but its ancestors still carried
+  // the plaintext. Every echo of a detected secret must go, not just the tail.
+  const ancestor = maskCredentials(
+    '- table [ref=e11]:\n' +
+    '  - row "Account Login Username: probe-user Password: probe-ancestor-secret Login" [ref=e12]:\n' +
+    '    - cell "Username: probe-user Password: probe-ancestor-secret" [ref=e13]:\n' +
+    '      - textbox "Username:" [ref=e14]: probe-user\n' +
+    '      - textbox "Password:" [ref=e15]: probe-ancestor-secret'
+  );
+  const ancestorOk = !ancestor.includes('probe-ancestor-secret') &&
+                     ancestor.includes('"Password:" [ref=e15]: ' + MASK) &&
+                     ancestor.includes('probe-user');
+
+  const ok = labeledOk && unlabeledOk && utilityOk && ancestorOk;
   if (!ok) {
     const failed = [
       labeledOk   ? null : 'labeled',
       unlabeledOk ? null : 'unlabeled',
-      utilityOk   ? null : 'utility(over-masking)'
+      utilityOk   ? null : 'utility(over-masking)',
+      ancestorOk  ? null : 'ancestor(name echo)'
     ].filter(Boolean).join(', ');
     process.stderr.write(
       `[${label}] *** CREDENTIAL MASK SELF-TEST FAILED [${failed}] *** ` +

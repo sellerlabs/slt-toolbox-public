@@ -18,7 +18,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 // Credential masking, shared with the headless bridge. See mask-credentials.js.
-const { maskCredentials, selfTest } = require('./mask-credentials');
+const { maskCredentials, maskJsonRpcLine, selfTest } = require('./mask-credentials');
 
 selfTest('playwright-mcp-visible');
 
@@ -284,7 +284,9 @@ function connectSSE(onClose) {
               handleSseData(data).catch(e => {
                 process.stderr.write(`[playwright-mcp-visible] handleSseData error: ${e.message}\n`);
                 // Mask on the fallback path too — an error here must not become a bypass.
-                process.stdout.write(maskCredentials(sanitizeSurrogates(data)) + '\n');
+                // data is raw JSON (snapshot newlines escaped), so it must be parsed
+                // before masking; maskCredentials on the string could never match a line.
+                process.stdout.write(maskJsonRpcLine(sanitizeSurrogates(data)) + '\n');
               });
             }
             curEvent = null;
