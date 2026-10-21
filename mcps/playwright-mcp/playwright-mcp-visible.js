@@ -25,6 +25,23 @@ selfTest('playwright-mcp-visible');
 const PORT = 3456;
 const SERVER_SCRIPT = path.join(__dirname, 'playwright-mcp-server.js');
 
+// ── stderr tee + crash capture (2026-10-20) ──
+// LazyHub does not persist child stderr, so bridge failures were invisible.
+// One shared file, each line tagged with this bridge's pid. Status lines only:
+// tool payloads go to stdout and never pass through here.
+try {
+  const bridgeLog = path.join(__dirname, 'logs', 'bridge.log');
+  fs.mkdirSync(path.dirname(bridgeLog), { recursive: true });
+  try { if (fs.statSync(bridgeLog).size > 5 * 1024 * 1024) fs.renameSync(bridgeLog, bridgeLog + '.1'); } catch (e) { /* no log yet */ }
+  const logLine = (msg) => {
+    try { fs.appendFileSync(bridgeLog, `[${new Date().toISOString()}] [pid ${process.pid}] ${String(msg).replace(/\n$/, '')}\n`); } catch (e) { /* best-effort */ }
+  };
+  const origWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, enc, cb) => { logLine(chunk); return origWrite(chunk, enc, cb); };
+  process.on('uncaughtExceptionMonitor', (err, origin) => logLine(`FATAL ${origin}: ${err && err.stack ? err.stack : err}`));
+  process.on('exit', (code) => logLine(`Exit code ${code}`));
+} catch (e) { /* logging must never break the bridge */ }
+
 // ── Server health check ──────────────────────────────────────────────────────
 
 function checkRunning() {

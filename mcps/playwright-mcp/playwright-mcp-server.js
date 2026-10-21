@@ -57,6 +57,30 @@ try {
     return origWrite(chunk, enc, cb);
   };
   process.stderr.write('[playwright-mcp-server] Logging to ' + logFile + '\n');
+
+  // ── crash capture (2026-10-20) ──
+  // The server died silently twice on 10/20 with many tabs open: Node prints a
+  // fatal error straight to fd 2, bypassing the tee above, and stdio is 'ignore'.
+  // Sync appends so the line lands before the process is gone. The monitor hook
+  // observes without changing crash semantics (unhandled rejections still crash).
+  // No "Exit" line after a death = killed externally (TerminateProcess/taskkill).
+  const crashLine = (msg) => {
+    try { fs.appendFileSync(logFile, '[' + new Date().toISOString() + '] [playwright-mcp-server] ' + msg + '\n'); } catch (e) { /* best-effort */ }
+  };
+  process.on('uncaughtExceptionMonitor', (err, origin) => {
+    crashLine(`FATAL ${origin}: ${err && err.stack ? err.stack : err}`);
+  });
+  process.on('exit', (code) => crashLine(`Exit code ${code}`));
+  // V8 OOM cannot be caught in JS; a diagnostic report lands in logs/ instead.
+  try {
+    process.report.reportOnFatalError = true;
+    process.report.directory = logDir;
+  } catch (e) { /* report API unavailable */ }
+  // Memory heartbeat, so an OOM shows its climb.
+  setInterval(() => {
+    const m = process.memoryUsage();
+    crashLine(`Heartbeat rss=${Math.round(m.rss / 1048576)}MB heap=${Math.round(m.heapUsed / 1048576)}/${Math.round(m.heapTotal / 1048576)}MB`);
+  }, 60 * 1000).unref();
 } catch (e) {
   // Logging is best-effort; a failure here must never prevent startup.
 }
