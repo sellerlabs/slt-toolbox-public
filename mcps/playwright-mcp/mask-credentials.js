@@ -68,6 +68,20 @@ const NODE_LINE = new RegExp(
   'i'
 );
 
+// A value-carrying control whose line ends at the colon: the value is not
+// inline but on a child `- text:` line (Zillow identity login, 2026-10-21):
+//   - textbox "Password" [ref=e39]:
+//     - /placeholder: Password*
+//     - text: hunter2
+const NODE_HEAD = new RegExp(
+  '^(\\s*)-?\\s*(?:' + VALUE_ROLES + ')(?:\\s+"([^"]*)")?[^\\n:]*:\\s*$',
+  'i'
+);
+
+// A child line carrying the control's typed value. `/placeholder:` and other
+// `/`-prefixed props are hints, not values, so they are left alone.
+const CHILD_VALUE = /^(\s*-\s*text:\s*)(.+)$/;
+
 function indentOf(line) {
   const m = line.match(/^(\s*)/);
   return m ? m[1].length : 0;
@@ -151,6 +165,23 @@ function maskCredentials(text) {
   let changed = false;
 
   for (let i = 0; i < lines.length; i++) {
+    const h = lines[i].match(NODE_HEAD);
+    if (h) {
+      const isCredential = h[2] !== undefined
+        ? SENSITIVE_LABEL.test(h[2])
+        : hasCredentialContext(lines, i, h[1].length);
+      if (!isCredential) continue;
+      // Mask the value children inside this node's own subtree only.
+      for (let j = i + 1; j < lines.length && indentOf(lines[j]) > h[1].length; j++) {
+        const c = lines[j].match(CHILD_VALUE);
+        if (!c || c[2].trim() === MASK) continue;
+        lines[j] = c[1] + MASK;
+        secrets.add(c[2].trim());
+        changed = true;
+      }
+      continue;
+    }
+
     const m = lines[i].match(NODE_LINE);
     if (!m) continue;
 
@@ -206,7 +237,7 @@ function maskJsonRpcLine(line) {
  * an in-process seam upstream does not guarantee, so verify at startup that the
  * mask still behaves rather than discovering a silent bypass during an incident.
  *
- * Four probes, because the mask has four ways to fail and each is a separate
+ * Five probes, because the mask has five ways to fail and each is a separate
  * incident:
  *   labeled   - the original 2026-08-04 Bluevine case.
  *   unlabeled - the 2026-08-21 DocHub case: no accessible name, credential
@@ -215,6 +246,7 @@ function maskJsonRpcLine(line) {
  *               make snapshots useless rather than safe.
  *   ancestor  - the 2026-10-19 Fulton County case: the field line was masked
  *               but row/cell names above it echoed the plaintext.
+ *   child     - the 2026-10-21 Zillow case: value on a child `- text:` line.
  * Returns true on pass; writes to stderr and returns false on failure.
  */
 function selfTest(label) {
@@ -264,13 +296,31 @@ function selfTest(label) {
                      ancestor.includes('"Password:" [ref=e15]: ' + MASK) &&
                      ancestor.includes('probe-user');
 
-  const ok = labeledOk && unlabeledOk && utilityOk && ancestorOk;
+  // The 2026-10-21 Zillow identity login case: the textbox line ends at its
+  // colon and the autofilled value sits on a child `- text:` line. The
+  // placeholder child and a non-credential sibling's child text must survive.
+  const child = maskCredentials(
+    '- group [ref=e16]:\n' +
+    '  - textbox "Email" [ref=e17]:\n' +
+    '    - text: probe@example.com\n' +
+    '  - textbox "Password" [ref=e18]:\n' +
+    '    - /placeholder: Password*\n' +
+    '    - text: probe-child-secret\n' +
+    '  - button "Show password" [ref=e19]'
+  );
+  const childOk = !child.includes('probe-child-secret') &&
+                  child.includes('- text: ' + MASK) &&
+                  child.includes('/placeholder: Password*') &&
+                  child.includes('probe@example.com');
+
+  const ok = labeledOk && unlabeledOk && utilityOk && ancestorOk && childOk;
   if (!ok) {
     const failed = [
       labeledOk   ? null : 'labeled',
       unlabeledOk ? null : 'unlabeled',
       utilityOk   ? null : 'utility(over-masking)',
-      ancestorOk  ? null : 'ancestor(name echo)'
+      ancestorOk  ? null : 'ancestor(name echo)',
+      childOk     ? null : 'child(text value)'
     ].filter(Boolean).join(', ');
     process.stderr.write(
       `[${label}] *** CREDENTIAL MASK SELF-TEST FAILED [${failed}] *** ` +
