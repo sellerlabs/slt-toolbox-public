@@ -269,16 +269,15 @@ function getDopplerSecrets() {
     }
     const dopplerBin = resolveDopplerBin();
     const out = require('child_process').execSync(
-      `"${dopplerBin}" secrets download --no-file --format env`,
+      `"${dopplerBin}" secrets download --no-file --format json`,
       { env: { ...process.env, DOPPLER_TOKEN: tokenMatch[1].trim() }, encoding: 'utf8' }
     );
-    for (const line of out.split(/\r?\n/)) {
-      const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-      if (!m) continue;
-      let val = m[2].trim();
-      // Doppler's env format double-quotes values; strip the wrapping quotes.
-      if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
-      _dopplerSecrets[m[1]] = val;
+    // JSON, not env format: a value with an embedded newline splits across lines in
+    // env format, and the line parser kept a stray leading quote. CLAUDE_CODE_OAUTH_TOKEN
+    // was stored with a trailing newline, so tasks sent `"sk-ant-...` and got
+    // "401 Invalid bearer token" (2026-10-23). Trim so stray whitespace can't break a key.
+    for (const [k, v] of Object.entries(JSON.parse(out))) {
+      _dopplerSecrets[k] = typeof v === 'string' ? v.trim() : v;
     }
     logScheduler(`Loaded ${Object.keys(_dopplerSecrets).length} secret(s) from Doppler for task injection`);
   } catch (e) {
@@ -286,6 +285,9 @@ function getDopplerSecrets() {
   }
   return _dopplerSecrets;
 }
+
+// Optional: point headless runs at a ~/.claude mirror without /login creds (null = use the default config dir).
+const prepareConfigMirror = () => null;
 
 // --- Task execution ---
 
@@ -348,8 +350,10 @@ const TRANSIENT_API_PATTERN = /overloaded_error|rate_limit_error|API Error:\s*(4
 // which is how four MCP-startup failures (7/04, 8/09, 8/10, 8/11) were logged green
 // and never retried by startup catch-up. These phrases are the agent SAYING it did
 // not do the work. They are deliberately specific: bare "failed" is not here, because
-// healthy runs legitimately report things like "0 failed".
-const SELF_REPORTED_FAILURE_PATTERN = /still connecting|tools (?:were|are) unavailable|MCP (?:server|tools?) (?:is |are |was |were )?(?:not |un)available|tools? (?:is|are|were) not available|no \S+ tools? (?:are|were) (?:discoverable|available)|not discoverable through it|unable to complete|could not run|could not complete|no accounts were checked|giving up|aborting the run|the slack gate blocked|slack (?:post|message) (?:is|was) gated|posting outside [^\n]{0,60}needs your explicit go-ahead|approve-slack-post/i;
+// healthy runs legitimately report things like "0 failed". "gated(?! off)": a run
+// saying its time-of-day "Slack post is gated off" is a normal skip, not the approval
+// gate blocking it (false alarm on fathom-meeting-ingest, 2026-10-23 16:00).
+const SELF_REPORTED_FAILURE_PATTERN = /still connecting|tools (?:were|are) unavailable|MCP (?:server|tools?) (?:is |are |was |were )?(?:not |un)available|tools? (?:is|are|were) not available|no \S+ tools? (?:are|were) (?:discoverable|available)|not discoverable through it|unable to complete|could not run|could not complete|no accounts were checked|giving up|aborting the run|the slack gate blocked|slack (?:post|message) (?:is|was) gated(?! off)|posting outside [^\n]{0,60}needs your explicit go-ahead|approve-slack-post/i;
 
 // A 429 that means "out of money" is permanent: retrying only re-runs the pipeline
 // after its earlier stages already committed (2026-10-17: the retry found 0 new videos,
@@ -555,7 +559,11 @@ async function executeTask(task, config) {
     // by the model it exempts. Scheduled tasks are still confined to the channels
     // listed in slackApprovalGate.scheduledChannels.
     env.CLAUDE_SCHEDULED_RUN = '1';
-    logScheduler(`${task.name} auth: ${env.CLAUDE_CODE_OAUTH_TOKEN ? 'CLAUDE_CODE_OAUTH_TOKEN injected' : '!!! NO CLAUDE_CODE_OAUTH_TOKEN (falls back to /login credentials)'}`);
+    // Only isolate when the env token is present; without it the /login creds are the
+    // sole way in, so the task must keep seeing ~/.claude.
+    const configDir = env.CLAUDE_CODE_OAUTH_TOKEN ? prepareConfigMirror(logScheduler) : null;
+    if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+    logScheduler(`${task.name} auth: ${!env.CLAUDE_CODE_OAUTH_TOKEN ? '!!! NO CLAUDE_CODE_OAUTH_TOKEN (falls back to /login credentials)' : configDir ? `CLAUDE_CODE_OAUTH_TOKEN injected, CLAUDE_CONFIG_DIR=${configDir}` : 'CLAUDE_CODE_OAUTH_TOKEN injected but config dir failed (/login credentials still win)'}`);
   }
 
   // Retry-with-backoff config. Only retries on transient API errors (529/503/429/overloaded).
