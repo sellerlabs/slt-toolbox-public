@@ -432,10 +432,18 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyC
  *   - screenshot() runs in place; only if it fails does it front the tab and retry.
  *   - bringToFront() is a no-op, which neutralizes upstream browser_tabs select.
  *   - forceBringToFront() is the real one, for browser_run_code when truly needed.
+ *   - context() returns the SESSION-scoped context (2026-10-27). It used to fall
+ *     through to the raw shared context, so a run_code script doing
+ *     `for (p of page.context().pages()) if (p !== page) p.close()` saw every tab
+ *     from every session, unwrapped, none === the wrapped `page`, and closed them
+ *     all; Chrome then exited on its last tab.
  */
-function wrapPageWithBringToFront(page) {
+function wrapPageWithBringToFront(page, getSessionCtx) {
   return new Proxy(page, {
     get(target, prop) {
+      if (prop === 'context' && getSessionCtx) {
+        return () => getSessionCtx();
+      }
       if (prop === 'screenshot') {
         return async (...args) => {
           try {
@@ -480,7 +488,7 @@ function createSessionContextFactory(getSharedContext) {
       // 'page' event (fires first) and newPage()'s return so both see one wrapper.
       const trackOwnPage = page => {
         if (ownPages.has(page)) return ownPages.get(page);
-        const wrapped = wrapPageWithBringToFront(page);
+        const wrapped = wrapPageWithBringToFront(page, () => sessionCtx);
         ownPages.set(page, wrapped);
         page.on('close', () => ownPages.delete(page));
         return wrapped;
@@ -537,7 +545,7 @@ function createSessionContextFactory(getSharedContext) {
                   }
                   if (!opener || !ownPages.has(opener)) return;
                   const alreadyTracked = ownPages.has(page);
-                  const adopted = alreadyTracked ? ownPages.get(page) : wrapPageWithBringToFront(page);
+                  const adopted = alreadyTracked ? ownPages.get(page) : wrapPageWithBringToFront(page, () => sessionCtx);
                   if (!alreadyTracked) {
                     ownPages.set(page, adopted);
                     page.on('close', () => ownPages.delete(page));

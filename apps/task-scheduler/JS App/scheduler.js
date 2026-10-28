@@ -286,6 +286,37 @@ function getDopplerSecrets() {
   return _dopplerSecrets;
 }
 
+// --- GitHub PAT as GH_TOKEN ---
+// The gh token in Windows Credential Manager does not survive reboots/updates
+// (wiped 2026-10-21 after updates and 2026-10-26 after a 9:11am reboot), and git
+// pushes go through `gh auth git-credential`, so every HTTPS push failed until a
+// manual re-auth. gh (and its credential helper) prefers GH_TOKEN over the keyring,
+// so inject the Doppler PAT (project github-mcp, the same one a GitHub MCP
+// would use) and the keyring stops mattering. Cached per process like _dopplerSecrets:
+// rotating the PAT needs a scheduler restart.
+const GITHUB_ENV_PATH = path.join(__dirname, '..', '..', '..', '..', 'Tools', 'GitHub-MCP', '.env');
+let _githubPat = null;
+function getGithubPat() {
+  if (_githubPat !== null) return _githubPat;
+  _githubPat = '';
+  try {
+    const tokenMatch = fs.readFileSync(GITHUB_ENV_PATH, 'utf8').match(/^DOPPLER_TOKEN=(.+)/m);
+    if (!tokenMatch) {
+      logScheduler('!!! WARNING: DOPPLER_TOKEN not found in the GitHub MCP .env — GH_TOKEN not injected, git pushes depend on the gh keyring login');
+      return _githubPat;
+    }
+    const out = require('child_process').execSync(
+      `"${resolveDopplerBin()}" secrets get GITHUB_PERSONAL_ACCESS_TOKEN --plain --project github-mcp --config dev`,
+      { env: { ...process.env, DOPPLER_TOKEN: tokenMatch[1].trim().replace(/^["']|["']$/g, '') }, encoding: 'utf8' }
+    );
+    _githubPat = out.trim();
+    logScheduler(_githubPat ? 'Loaded GitHub PAT from Doppler for GH_TOKEN injection' : '!!! WARNING: GitHub PAT from Doppler was empty');
+  } catch (e) {
+    logScheduler(`!!! WARNING: GitHub PAT fetch failed (${e.message.split('\n')[0]}) — GH_TOKEN not injected`);
+  }
+  return _githubPat;
+}
+
 // Optional: point headless runs at a ~/.claude mirror without /login creds (null = use the default config dir).
 const prepareConfigMirror = () => null;
 
@@ -538,6 +569,7 @@ async function executeTask(task, config) {
     if (env[k] === undefined) env[k] = v;
   }
   if (env.SLACK_BOT_TOKEN === undefined && getSlackBotToken()) env.SLACK_BOT_TOKEN = getSlackBotToken();
+  if (env.GH_TOKEN === undefined && getGithubPat()) env.GH_TOKEN = getGithubPat();
   // NEVER let ANTHROPIC_API_KEY reach a spawned `claude` process. When it is set,
   // the Claude CLI bills to pay-as-you-go API rates instead of the subscription.
   // From 2026-06-23 (when Doppler injection landed) to 2026-07-26 this quietly put
