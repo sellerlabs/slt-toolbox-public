@@ -319,6 +319,7 @@ function getGithubPat() {
 
 // Optional: point headless runs at a ~/.claude mirror without /login creds (null = use the default config dir).
 const prepareConfigMirror = () => null;
+const { prewarmHub } = require('./hub-prewarm.js');
 
 // --- Task execution ---
 
@@ -468,6 +469,7 @@ function runOnce(task, spawnConfig, env, logPath) {
     let killedByTimeout = false;
     let sawStdout = false;
     let sawSelfReportedFailure = false;
+    let stdoutTail = ''; // last 20KB of stdout, for the task's successPattern check
 
     const child = spawn(spawnConfig.command, spawnConfig.args, {
       cwd: spawnConfig.cwd,
@@ -498,6 +500,7 @@ function runOnce(task, spawnConfig, env, logPath) {
       // stdout before we timed it out, its work completed and only the process
       // shutdown ran long — that's a success we shouldn't flag red.
       if (isStdout && text.trim().length > 0) sawStdout = true;
+      if (isStdout) stdoutTail = (stdoutTail + text).slice(-20000);
       fs.appendFileSync(logPath, text);
     };
 
@@ -511,10 +514,10 @@ function runOnce(task, spawnConfig, env, logPath) {
       // shuts down slowly stops showing a false exit 1.
       if (killedByTimeout && sawStdout) {
         appendLog(logPath, `\nNote: killed by timeout after producing output — treating as success.`);
-        resolve({ exitCode: 0, sawTransientError, sawSelfReportedFailure });
+        resolve({ exitCode: 0, sawTransientError, sawSelfReportedFailure, stdoutTail });
         return;
       }
-      resolve({ exitCode: code !== null ? code : 1, sawTransientError: sawTransientError && !sawNonRetryable, sawSelfReportedFailure });
+      resolve({ exitCode: code !== null ? code : 1, sawTransientError: sawTransientError && !sawNonRetryable, sawSelfReportedFailure, stdoutTail });
     });
 
     child.on('error', (err) => {
@@ -602,6 +605,26 @@ async function executeTask(task, config) {
   const maxRetries = task.maxRetries !== undefined ? task.maxRetries : 3;
   const baseDelayMs = task.retryBaseDelayMs !== undefined ? task.retryBaseDelayMs : 30000;
 
+  // Hub prewarm (2026-10-28). A task listing `prewarmTools` (hub-side names, e.g.
+  // "x_post_tweet") gets a throwaway lazy-hub started first and polled until those
+  // tools are listed, so the task's own hub starts warm (~5s) instead of cold (~55s+).
+  // MCP_TIMEOUT widens the CLI's own server-startup wait for the same tasks. On the
+  // 10/28 X-post failure the CLI took ~3.7 min to its first turn and never exposed a
+  // single lazy-hub tool. hub-prewarm.js has the full story.
+  if (task.type === 'claude' && Array.isArray(task.prewarmTools) && task.prewarmTools.length) {
+    const warm = await prewarmHub({
+      projectRoot: config.settings.projectRoot,
+      tools: task.prewarmTools,
+      log: (m) => logScheduler(`${task.name} ${m}`),
+    });
+    const line = warm.ok
+      ? `hub prewarm OK in ${Math.round(warm.ms / 1000)}s (${warm.toolCount} tools, needed: ${task.prewarmTools.join(', ')})`
+      : `hub prewarm FAILED after ${Math.round(warm.ms / 1000)}s: ${warm.reason}; starting the task anyway`;
+    appendLog(logPath, line);
+    logScheduler(`${task.name} ${line}`);
+    if (env.MCP_TIMEOUT === undefined) env.MCP_TIMEOUT = '120000';
+  }
+
   try {
     let result;
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -624,13 +647,31 @@ async function executeTask(task, config) {
     // The agent cannot set its own exit code (a Bash `exit 1` exits the subshell, not
     // `claude`), so without this check the ledger stamps a give-up as green and
     // startup catch-up never re-fires it. See SELF_REPORTED_FAILURE_PATTERN.
-    const selfReportedFailure = result.exitCode === 0 && result.sawSelfReportedFailure;
+    //
+    // Required success line (2026-10-28). The phrase list above only catches give-ups
+    // worded the way past ones were; x-post-ai-was-bad-so-i-quit ended with "I'll retry
+    // ... as soon as that monitor fires", matched nothing, and was logged green with
+    // nothing posted. A task can instead name the line it MUST print on success
+    // (`successPattern`, a multiline regex tested against stdout). No match = failure,
+    // whatever the wording of the give-up.
+    let missingSuccessLine = false;
+    if (result.exitCode === 0 && task.successPattern) {
+      try {
+        missingSuccessLine = !new RegExp(task.successPattern, 'm').test(result.stdoutTail || '');
+      } catch (e) {
+        logScheduler(`!!! ${task.name} has an invalid successPattern (${e.message}); treating the run as failed`);
+        missingSuccessLine = true;
+      }
+    }
+    const selfReportedFailure = result.exitCode === 0 && (result.sawSelfReportedFailure || missingSuccessLine);
 
     appendLog(logPath, '');
     if (selfReportedFailure) {
-      appendLog(logPath, `WARNING: the task exited 0 but its own output reports it could not complete the work.`);
+      appendLog(logPath, missingSuccessLine
+        ? `WARNING: the task exited 0 but never printed its required success line (successPattern ${task.successPattern}).`
+        : `WARNING: the task exited 0 but its own output reports it could not complete the work.`);
       appendLog(logPath, `Not recording this run as successful, so startup catch-up can re-fire it.`);
-      logScheduler(`${task.name} exited 0 but SELF-REPORTED FAILURE — not recorded as success`);
+      logScheduler(`${task.name} exited 0 but ${missingSuccessLine ? 'MISSING SUCCESS LINE' : 'SELF-REPORTED FAILURE'} — not recorded as success`);
     }
     appendLog(logPath, `Run finished: ${getTimestamp()} (exit code: ${result.exitCode}${selfReportedFailure ? ', SELF-REPORTED FAILURE' : ''})`);
     appendLog(logPath, '============================================================');
@@ -640,7 +681,9 @@ async function executeTask(task, config) {
     // exit, and an exit-0 run whose own output admits it could not do the work.
     // Without this, an unattended failure is visible only to whoever opens the log.
     if (result.exitCode !== 0 || selfReportedFailure) {
-      const reason = selfReportedFailure
+      const reason = missingSuccessLine
+        ? 'Exited 0 but never printed its required success line, so the work most likely did not happen.'
+        : selfReportedFailure
         ? 'Exited 0 but its own output reports it could not complete the work.'
         : `Exited with code ${result.exitCode}${result.sawTransientError ? ' after exhausting transient-error retries' : ''}.`;
       await notifyTaskFailure(task.name, reason, logPath);
