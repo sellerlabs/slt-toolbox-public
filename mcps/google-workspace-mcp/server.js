@@ -54,7 +54,7 @@ function validateSavePath(savePath) {
 }
 import { listCalendarEvents, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, findFreeTime } from './calendar.js'
 import { searchDrive, listDriveFiles, readDriveFile, uploadDriveFile, convertToDoc, moveDriveFile, renameDriveFile, createDriveFolder } from './drive.js'
-import { createSpreadsheet, convertToSheet, getSpreadsheetInfo, readSheetRange, writeSheetRange, appendSheetRows, insertRows, insertColumns, moveColumns, setCellColor, readSheetFormat, clearSheetRange, batchWriteSheet } from './sheets.js'
+import { createSpreadsheet, convertToSheet, getSpreadsheetInfo, readSheetRange, writeSheetRange, appendSheetRows, insertRows, insertColumns, moveColumns, addTab, deleteDimension, setCellColor, readSheetFormat, clearSheetRange, batchWriteSheet } from './sheets.js'
 import { createDoc, readDoc, appendToDoc, replaceTextInDoc } from './docs.js'
 import { createPresentation, getPresentation, addSlide, setSlideText, deleteSlide, setSpeakerNotes } from './slides.js'
 
@@ -660,6 +660,41 @@ server.tool(
   async ({ spreadsheetId, sourceStart, sourceEnd, beforeColumn, toEnd, sheetName, account }) => {
     const [{ auth }] = resolveAccounts(account)
     const result = await moveColumns(auth, spreadsheetId, sourceStart, sourceEnd, beforeColumn, sheetName, toEnd)
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  }
+)
+
+server.tool(
+  'sheets_add_tab',
+  'Add a new tab to an existing spreadsheet (sheets_create makes a whole new spreadsheet; this adds a tab to one that exists). Optionally seeds rows starting at A1.',
+  {
+    spreadsheetId: z.string().describe('Google Sheets spreadsheet ID'),
+    title: z.string().describe('Name of the new tab (must not already exist)'),
+    index: z.number().int().min(0).optional().describe('0-based position among the tabs (defaults to last)'),
+    values: z.array(z.array(z.any())).optional().describe('Optional 2D array written starting at A1, e.g. a header row'),
+    account: z.string().describe('Account nickname, email, or alias that owns this sheet (required)'),
+  },
+  async ({ spreadsheetId, title, index, values, account }) => {
+    const [{ auth }] = resolveAccounts(account)
+    const result = await addTab(auth, spreadsheetId, title, index, values)
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  }
+)
+
+server.tool(
+  'sheets_delete_dimension',
+  'DESTRUCTIVE: delete a contiguous block of rows or columns (values and formatting), shifting the rest up/left. Only call with the user\'s explicit "delete it". Rows are 1-based sheet row numbers (take them from rows[i].row of a fresh read); columns are letters. To delete several non-adjacent rows, call bottom-up so earlier row numbers stay valid. Returns the deleted values for audit. Always re-read afterwards.',
+  {
+    spreadsheetId: z.string().describe('Google Sheets spreadsheet ID'),
+    dimension: z.enum(['ROWS', 'COLUMNS']).describe('ROWS or COLUMNS'),
+    start: z.union([z.string(), z.number().int().min(0)]).describe('ROWS: 1-based row number. COLUMNS: A1 letter like "I" or 0-based index'),
+    end: z.union([z.string(), z.number().int().min(0)]).optional().describe('Last row/column to delete, INCLUSIVE (defaults to start)'),
+    sheetName: z.string().optional().describe('Tab name (defaults to the first tab)'),
+    account: z.string().describe('Account nickname, email, or alias that owns this sheet (required)'),
+  },
+  async ({ spreadsheetId, dimension, start, end, sheetName, account }) => {
+    const [{ auth }] = resolveAccounts(account)
+    const result = await deleteDimension(auth, spreadsheetId, dimension, start, end, sheetName)
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
   }
 )

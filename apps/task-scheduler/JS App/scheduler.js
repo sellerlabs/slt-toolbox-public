@@ -654,10 +654,13 @@ async function executeTask(task, config) {
     // nothing posted. A task can instead name the line it MUST print on success
     // (`successPattern`, a multiline regex tested against stdout). No match = failure,
     // whatever the wording of the give-up.
+    // Markdown wrapping is stripped first: x-post-ai-made-me-prove-my-claim (2026-10-29)
+    // posted fine but printed "**POSTED https://...**", which failed a ^POSTED pattern.
     let missingSuccessLine = false;
     if (result.exitCode === 0 && task.successPattern) {
       try {
-        missingSuccessLine = !new RegExp(task.successPattern, 'm').test(result.stdoutTail || '');
+        const plain = (result.stdoutTail || '').replace(/^[ \t>*_`#-]+/gm, '').replace(/[*_`]+[ \t]*$/gm, '');
+        missingSuccessLine = !new RegExp(task.successPattern, 'm').test(plain);
       } catch (e) {
         logScheduler(`!!! ${task.name} has an invalid successPattern (${e.message}); treating the run as failed`);
         missingSuccessLine = true;

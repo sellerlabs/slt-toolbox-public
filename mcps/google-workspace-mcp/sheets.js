@@ -503,6 +503,89 @@ export async function moveColumns(auth, spreadsheetId, sourceStart, sourceEnd, b
   }
 }
 
+/**
+ * Add a new tab to an existing spreadsheet. Optionally seeds it with rows from A1.
+ *
+ * @param {string} spreadsheetId
+ * @param {string} title - Name of the new tab (must not already exist).
+ * @param {number} [index] - 0-based position among the tabs (defaults to last).
+ * @param {Array<Array<any>>} [values] - Optional 2D array written starting at A1.
+ */
+export async function addTab(auth, spreadsheetId, title, index, values) {
+  const sheets = google.sheets({ version: 'v4', auth })
+  const properties = { title }
+  if (index !== undefined && index !== null) properties.index = index
+  const { data } = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: [{ addSheet: { properties } }] },
+  })
+  const added = data.replies[0].addSheet.properties
+
+  let write
+  if (values && values.length) {
+    const { data: w } = await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${added.title}'!A1`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values },
+    })
+    write = { updatedRange: w.updatedRange, updatedCells: w.updatedCells }
+  }
+
+  return { spreadsheetId, sheet: added.title, sheetId: added.sheetId, index: added.index, ...(write ? { write } : {}) }
+}
+
+/**
+ * Delete a contiguous block of rows or columns (values, formatting, and all), shifting the rest
+ * up/left. Uses the Sheets deleteDimension batchUpdate. DESTRUCTIVE: the caller must have explicit
+ * approval. The deleted cells are read first and returned so the change is auditable.
+ *
+ * @param {string} spreadsheetId
+ * @param {'ROWS'|'COLUMNS'} dimension
+ * @param {string|number} start - ROWS: 1-based sheet row number. COLUMNS: letter ("K") or 0-based index.
+ * @param {string|number} [end] - Last row/column to delete, INCLUSIVE (defaults to start).
+ * @param {string} [sheetName] - Tab name (defaults to the first tab).
+ */
+export async function deleteDimension(auth, spreadsheetId, dimension, start, end, sheetName) {
+  const sheets = google.sheets({ version: 'v4', auth })
+  const target = await resolveSheetProps(sheets, spreadsheetId, sheetName)
+  const sheetId = target.sheetId
+  const hasEnd = end !== undefined && end !== null && end !== ''
+
+  let startIndex, lastIndex, a1
+  if (dimension === 'ROWS') {
+    const first = Number(start)
+    const last = hasEnd ? Number(end) : first
+    if (!Number.isInteger(first) || first < 1 || !Number.isInteger(last)) throw new Error('ROWS start/end must be 1-based row numbers')
+    startIndex = first - 1
+    lastIndex = last - 1
+    a1 = `${first}:${last}`
+  } else if (dimension === 'COLUMNS') {
+    startIndex = columnToIndex(start)
+    lastIndex = hasEnd ? columnToIndex(end) : startIndex
+    a1 = `${indexToColumn(startIndex)}:${indexToColumn(lastIndex)}`
+  } else {
+    throw new Error('dimension must be ROWS or COLUMNS')
+  }
+  if (lastIndex < startIndex) throw new Error('end must be at or after start')
+
+  // Capture what is about to be removed.
+  const { data: before } = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${target.title}'!${a1}` })
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        deleteDimension: {
+          range: { sheetId, dimension, startIndex, endIndex: lastIndex + 1 },
+        },
+      }],
+    },
+  })
+
+  return { spreadsheetId, sheet: target.title, sheetId, dimension, deleted: a1, deletedValues: before.values || [] }
+}
+
 /** Parse "#RRGGBB" / "RRGGBB" / "#RGB" into a Sheets Color object (0-1 floats). */
 function hexToColor(hex) {
   let h = String(hex).trim().replace(/^#/, '')

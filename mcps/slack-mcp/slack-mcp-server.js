@@ -27,6 +27,42 @@ function getClient() {
   return new WebClient(SLACK_BOT_TOKEN);
 }
 
+// the user's own user token (xoxp-). The bot token can't see DMs and always posts as the bot,
+// so DM reads/posts go through this one. Posts made with it appear as the user themself.
+function getUserClient() {
+  const { SLACK_USER_TOKEN } = process.env;
+  if (!SLACK_USER_TOKEN) {
+    throw new Error('Missing SLACK_USER_TOKEN in slack-mcp/.env (see "User token" in slack-mcp-Context.md).');
+  }
+  return new WebClient(SLACK_USER_TOKEN);
+}
+
+// Resolve a DM target to a conversation ID. D…/G…/C… pass through (group DMs list as C…); a user ID (U…/W…)
+// opens (or reuses) the 1:1 DM via conversations.open (im:write).
+async function resolveDm(client, target) {
+  const t = (target || '').trim();
+  if (/^[DGC][A-Z0-9]{6,}$/.test(t)) return t;
+  if (/^[UW][A-Z0-9]{6,}$/.test(t)) {
+    const res = await client.conversations.open({ users: t });
+    return res.channel.id;
+  }
+  throw new Error(`"${target}" is not a DM ID (D…/G…/C…) or user ID (U…). Use slack_list_dms to find it.`);
+}
+
+// user ID -> display name, cached per process (users:read).
+const userNameCache = new Map();
+async function userName(client, id) {
+  if (!id) return '?';
+  if (userNameCache.has(id)) return userNameCache.get(id);
+  let name = id;
+  try {
+    const res = await client.users.info({ user: id });
+    name = res.user?.profile?.real_name || res.user?.real_name || res.user?.name || id;
+  } catch { /* keep the raw ID */ }
+  userNameCache.set(id, name);
+  return name;
+}
+
 // Resolve a channel name (#name / name) to a channel ID. IDs (C…/G…/D…) pass through.
 // Cached per process so repeated calls don't re-list.
 let channelCache = null;
@@ -278,6 +314,76 @@ server.registerTool('slack_get_file', {
     // toString('utf8') replaces any partial trailing char from the slice, no crash.
     const body = bytes.toString('utf8');
     return ok(`${meta}\n\n----- content -----\n${body}${truncated}`);
+  } catch (err) {
+    throw apiError(err);
+  }
+});
+
+// ---- DMs via the user's user token -------------------------------------------
+server.registerTool('slack_list_dms', {
+  description: "List the user's DMs and group DMs (user token). Returns each DM's ID and the other person's name, for use with slack_read_dm / slack_post_as_user.",
+  inputSchema: {
+    limit: z.number().int().min(1).max(1000).default(100).describe('Max DMs to return (default 100).'),
+  },
+}, async ({ limit }) => {
+  const client = getUserClient();
+  try {
+    const res = await client.conversations.list({ types: 'im,mpim', exclude_archived: true, limit });
+    const chans = res.channels || [];
+    if (!chans.length) return ok('No DMs found.');
+    const lines = [];
+    for (const c of chans) {
+      lines.push(`${c.is_im ? await userName(client, c.user) : (c.name || c.id)}\t${c.id}${c.is_mpim ? '\t(group)' : ''}`);
+    }
+    return ok(`name\tid\n${lines.join('\n')}`);
+  } catch (err) {
+    throw apiError(err);
+  }
+});
+
+server.registerTool('slack_read_dm', {
+  description: "Read recent messages in one of the user's DMs (user token, conversations.history). Newest-first, with each ts and sender name. Parents with replies are tagged; pass thread_ts to read that thread instead.",
+  inputSchema: {
+    channel: z.string().optional().describe('DM ID (D…/G…/C…) or the other person\'s user ID (U…).'),
+    limit: z.number().int().min(1).max(200).default(20).describe('How many recent messages (1-200, default 20).'),
+    thread_ts: z.string().optional().describe('If set, read this thread\'s replies (parent first) instead of the DM history.'),
+  },
+}, async ({ channel, limit, thread_ts }) => {
+  const client = getUserClient();
+  try {
+    const channelId = await resolveDm(client, channel);
+    const res = thread_ts
+      ? await client.conversations.replies({ channel: channelId, ts: thread_ts, limit })
+      : await client.conversations.history({ channel: channelId, limit });
+    const msgs = res.messages || [];
+    if (!msgs.length) return ok('No messages found.');
+    const lines = [];
+    for (const m of msgs) {
+      const who = m.user ? await userName(client, m.user) : (m.username || m.bot_id || '?');
+      const thread = !thread_ts && m.reply_count ? ` [thread: ${m.reply_count} replies, re-call with thread_ts ${m.ts}]` : '';
+      lines.push(`[ts ${m.ts}]${thread} ${who}: ${m.text || ''}`);
+    }
+    return ok(`DM ${channelId}${thread_ts ? `, thread ${thread_ts}` : ''}:\n\n${lines.join('\n\n')}`);
+  } catch (err) {
+    throw apiError(err);
+  }
+});
+
+// Gated by slackApprovalGate in rules-map.json like slack_post_message: every DM post
+// needs the user's go-ahead on the exact text plus a single-use approve-slack-post.js token.
+server.registerTool('slack_post_as_user', {
+  description: "Post a message AS THE USER (user token) into a DM or group DM. Appears as the user, not the bot. Requires the user's go-ahead on the exact text and an approval token (hook-gated). text is Slack mrkdwn.",
+  inputSchema: {
+    channel: z.string().optional().describe('DM ID (D…/G…/C…) or the other person\'s user ID (U…). Mint the approval token for this exact value.'),
+    text: z.string().min(1).describe('Message text in Slack mrkdwn.'),
+    thread_ts: z.string().optional().describe('If set, reply in this thread.'),
+  },
+}, async ({ channel, text, thread_ts }) => {
+  const client = getUserClient();
+  try {
+    const channelId = await resolveDm(client, channel);
+    const res = await client.chat.postMessage({ channel: channelId, text, thread_ts });
+    return ok(`Posted as the user to ${channelId}.\nts: ${res.ts}${thread_ts ? `\nthread: ${thread_ts}` : ''}`);
   } catch (err) {
     throw apiError(err);
   }
