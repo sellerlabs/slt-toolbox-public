@@ -709,7 +709,9 @@ async function main() {
           await new Promise(r => setTimeout(r, 2000));
           await spawnChrome();
         }
-        const browser = await playwright.chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+        // isLocal: Chrome is on this host, so file uploads pass paths instead of
+        // base64 payloads capped at 50MB (2026-11-02, multi-GB YouTube uploads).
+        const browser = await playwright.chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`, { isLocal: true });
         // Note: a connectOverCDP default context reports acceptDownloads 'accept'
         // (was false). routeChromeDownloads() below still sets browser-wide
         // behavior 'allow' to downloadsDir, and the built-in save is try/catch
