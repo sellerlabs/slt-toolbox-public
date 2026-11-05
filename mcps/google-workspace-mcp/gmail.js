@@ -148,6 +148,8 @@ export async function readGmail(auth, messageId) {
   )
 
   const body = extractBody(data.payload)
+  // Pulled from the HTML part even when text/plain wins for `body`: plain parts often omit link targets.
+  const links = extractLinks(findHtml(data.payload))
   const attachments = extractAttachments(data.payload)
 
   return {
@@ -160,6 +162,7 @@ export async function readGmail(auth, messageId) {
     bcc: headers['bcc'] || '',
     date: headers['date'] || '',
     body,
+    links,
     attachments,
     labelIds: data.labelIds || [],
   }
@@ -682,13 +685,72 @@ export async function downloadGmailAttachment(auth, messageId, attachmentId, sav
   return { size: buffer.length, savedTo: savePath }
 }
 
+// Matches an <a> tag and its inner HTML. The href is pulled from the attributes
+// separately (HREF_ATTR) because senders emit it double-quoted, single-quoted, or
+// UNQUOTED (2026-11-04: the ECYD "Parent Authorization" email used
+// `<a href=https://...>here</a>`, which the old quoted-only regex silently dropped).
+const ANCHOR_TAG = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi
+const HREF_ATTR = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i
+
+function decodeEntities(text) {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+}
+
+function anchorHref(attrs) {
+  const m = attrs.match(HREF_ATTR)
+  const href = m ? (m[1] ?? m[2] ?? m[3]).trim() : ''
+  return href ? decodeEntities(href) : ''
+}
+
+function anchorLabel(inner) {
+  return decodeEntities(inner.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Every link target in an HTML body as [{ text, href }], deduplicated by href.
+ * Returned by readGmail so callers never depend on how the body text renders.
+ */
+function extractLinks(html) {
+  const seen = new Map()
+  for (const [, attrs, inner] of html.matchAll(ANCHOR_TAG)) {
+    const href = anchorHref(attrs)
+    if (!href || href.startsWith('#') || /^javascript:/i.test(href)) continue
+    const text = anchorLabel(inner)
+    if (!seen.has(href)) seen.set(href, { text, href })
+    else if (!seen.get(href).text && text) seen.get(href).text = text
+  }
+  return [...seen.values()]
+}
+
+/** First text/html part's decoded HTML, searching nested multiparts. */
+function findHtml(payload) {
+  if (!payload) return ''
+  if (payload.mimeType === 'text/html' && payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64').toString('utf8')
+  }
+  for (const part of payload.parts || []) {
+    const html = findHtml(part)
+    if (html) return html
+  }
+  return ''
+}
+
 /**
  * Convert HTML to readable plain text, preserving hyperlinks as "text (URL)".
  */
 function htmlToText(html) {
   return html
-    .replace(/<a\s[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href, text) => {
-      const label = text.replace(/<[^>]+>/g, '').trim()
+    .replace(/<(head|style|script)\b[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(ANCHOR_TAG, (whole, attrs, inner) => {
+      const href = anchorHref(attrs)
+      const label = anchorLabel(inner)
+      if (!href) return inner
       return label ? `${label} (${href})` : href
     })
     .replace(/<br\s*\/?>/gi, '\n')
