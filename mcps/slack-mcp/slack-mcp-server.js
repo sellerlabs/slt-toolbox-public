@@ -98,6 +98,20 @@ function apiError(err) {
   return new Error(`Slack API error: ${detail}`);
 }
 
+// Channel reads: try the bot token first; if the bot isn't in the channel, retry with the
+// user token (channels:history / groups:history), which reads any channel the user is in.
+async function readWithUserFallback(fn) {
+  try {
+    return await fn(getClient());
+  } catch (err) {
+    const code = err?.data?.error;
+    if ((code === 'not_in_channel' || code === 'channel_not_found') && process.env.SLACK_USER_TOKEN) {
+      return await fn(getUserClient());
+    }
+    throw err;
+  }
+}
+
 const server = new McpServer({ name: 'slack-mcp', version: '1.0.0' });
 
 // ---- post_message ---------------------------------------------------------
@@ -148,7 +162,7 @@ server.registerTool('slack_update_message', {
 
 // ---- read_channel ---------------------------------------------------------
 server.registerTool('slack_read_channel', {
-  description: 'Read recent messages from a channel (conversations.history). Returns newest-first with each message ts so you can reply/update.',
+  description: 'Read recent messages from a channel (conversations.history). Returns newest-first with each message ts so you can reply/update. Falls back to the user token if the bot is not in the channel, so any channel the user is in can be read.',
   inputSchema: {
     channel: z.string().optional().describe('Channel ID or name to read.'),
     limit: z.number().int().min(1).max(200).default(20).describe('How many recent messages (1-200, default 20).'),
@@ -157,7 +171,7 @@ server.registerTool('slack_read_channel', {
   const client = getClient();
   try {
     const channelId = await resolveChannel(client, channel || DEFAULT_CHANNEL);
-    const res = await client.conversations.history({ channel: channelId, limit });
+    const res = await readWithUserFallback(c => c.conversations.history({ channel: channelId, limit }));
     const msgs = res.messages || [];
     if (!msgs.length) return ok('No messages found.');
     // reply_count MUST be surfaced: without it a parent carrying threaded replies renders
@@ -171,7 +185,7 @@ server.registerTool('slack_read_channel', {
 
 // ---- read_thread ----------------------------------------------------------
 server.registerTool('slack_read_thread', {
-  description: 'Read all replies in a thread (conversations.replies). Pass the parent message ts as thread_ts; slack_read_channel marks parents that have replies.',
+  description: 'Read all replies in a thread (conversations.replies). Pass the parent message ts as thread_ts; slack_read_channel marks parents that have replies. Falls back to the user token if the bot is not in the channel.',
   inputSchema: {
     channel: z.string().optional().describe('Channel ID or name containing the thread.'),
     thread_ts: z.string().describe('ts of the thread parent message (from slack_read_channel).'),
@@ -181,7 +195,7 @@ server.registerTool('slack_read_thread', {
   const client = getClient();
   try {
     const channelId = await resolveChannel(client, channel || DEFAULT_CHANNEL);
-    const res = await client.conversations.replies({ channel: channelId, ts: thread_ts, limit });
+    const res = await readWithUserFallback(c => c.conversations.replies({ channel: channelId, ts: thread_ts, limit }));
     const msgs = res.messages || [];
     if (!msgs.length) return ok('No messages found in thread.');
     // conversations.replies returns the parent as the first element, not a reply.
@@ -372,9 +386,9 @@ server.registerTool('slack_read_dm', {
 // Gated by slackApprovalGate in rules-map.json like slack_post_message: every DM post
 // needs the user's go-ahead on the exact text plus a single-use approve-slack-post.js token.
 server.registerTool('slack_post_as_user', {
-  description: "Post a message AS THE USER (user token) into a DM or group DM. Appears as the user, not the bot. Requires the user's go-ahead on the exact text and an approval token (hook-gated). text is Slack mrkdwn.",
+  description: "Post a message AS THE USER (user token) into a DM, group DM, OR any channel the user is a member of (C… ID, optionally in a thread via thread_ts). Appears as the user, not the bot; prefer this over slack_post_message for customer-facing channel replies. Requires the user's go-ahead on the exact text and an approval token (hook-gated). text is Slack mrkdwn.",
   inputSchema: {
-    channel: z.string().optional().describe('DM ID (D…/G…/C…) or the other person\'s user ID (U…). Mint the approval token for this exact value.'),
+    channel: z.string().optional().describe('DM ID (D…), group DM (G…), channel ID (C…) the user belongs to, or the other person\'s user ID (U…). Mint the approval token for this exact value.'),
     text: z.string().min(1).describe('Message text in Slack mrkdwn.'),
     thread_ts: z.string().optional().describe('If set, reply in this thread.'),
   },
