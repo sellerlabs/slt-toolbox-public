@@ -186,10 +186,11 @@ server.tool(
     attachments: z.array(z.string()).optional().default([]).describe('List of absolute local file paths to attach (e.g. ["<USER_HOME>/Downloads/invoice.pdf"])'),
     threadId: z.string().optional().describe('Gmail thread ID to attach this draft to (makes it appear as a reply in the same thread)'),
     replyToMessageId: z.string().optional().describe('Gmail message ID to reply to (sets In-Reply-To and References headers for proper threading)'),
+    from: z.string().optional().describe('Send-as alias to use as the From address (e.g. "support@rankgeniusapp.com" on the work account). Must be a verified send-as identity on the account; the display name comes from Gmail settings. Omit to use the account default.'),
   },
-  async ({ to, subject, body, bodyHtml, cc, account, attachments, threadId, replyToMessageId }) => {
+  async ({ to, subject, body, bodyHtml, cc, account, attachments, threadId, replyToMessageId, from }) => {
     const [{ auth }] = resolveAccounts(account)
-    const draft = await createGmailDraft(auth, to, subject, body, attachments, threadId, replyToMessageId, bodyHtml, cc)
+    const draft = await createGmailDraft(auth, to, subject, body, attachments, threadId, replyToMessageId, bodyHtml, cc, from)
     return { content: [{ type: 'text', text: JSON.stringify(draft, null, 2) }] }
   }
 )
@@ -198,7 +199,7 @@ server.tool(
   'gmail_send_draft',
   'Send an existing Gmail draft by its draft ID. IMPORTANT: Always show the full draft content to the user and wait for explicit "send it" confirmation before calling this tool. Use the draftId from gmail_create_draft results.',
   {
-    draftId: z.string().describe('Draft ID to send (from gmail_create_draft results)'),
+    draftId: z.string().describe('Draft ID (from gmail_create_draft) or the draft\'s message ID (from gmail_search with in:drafts); a message ID is resolved to the draft automatically'),
     account: z.string().describe('Account nickname, email, or alias that owns this draft (required)'),
   },
   async ({ draftId, account }) => {
@@ -273,7 +274,7 @@ server.tool(
   'gmail_delete_draft',
   'Delete a Gmail draft by its draft ID. Use the draftId from gmail_create_draft results.',
   {
-    draftId: z.string().describe('Draft ID to delete (from gmail_create_draft or gmail_search with in:drafts)'),
+    draftId: z.string().describe('Draft ID (from gmail_create_draft) or the draft\'s message ID (from gmail_search with in:drafts); a message ID is resolved to the draft automatically'),
     account: z.string().describe('Account nickname, email, or alias that owns this draft (required)'),
   },
   async ({ draftId, account }) => {

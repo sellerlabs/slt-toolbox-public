@@ -358,13 +358,39 @@ function unescapeIfFullyEscapedHtml(bodyHtml, context) {
 }
 
 /**
+ * Resolve a requested From address against the account's verified send-as identities.
+ * Returns a ready-to-use `From:` header line. Throws if the address is not an
+ * accepted send-as on this account, so the tool cannot spoof an unverified sender
+ * (Gmail would otherwise silently rewrite it to the primary address).
+ */
+async function resolveFromHeader(gmail, from) {
+  const wanted = from.trim().toLowerCase()
+  const { data } = await gmail.users.settings.sendAs.list({ userId: 'me' })
+  const match = (data.sendAs || []).find(s => s.sendAsEmail.toLowerCase() === wanted)
+  const usable = match && (match.isPrimary || match.verificationStatus === 'accepted')
+  if (!usable) {
+    const allowed = (data.sendAs || [])
+      .filter(s => s.isPrimary || s.verificationStatus === 'accepted')
+      .map(s => s.sendAsEmail)
+    throw new Error(`"${from}" is not a verified send-as address on this account. Allowed: ${allowed.join(', ')}`)
+  }
+  const name = match.displayName
+  if (!name) return `From: ${match.sendAsEmail}`
+  const displayName = encodeMimeHeader(name) === name ? JSON.stringify(name) : encodeMimeHeader(name)
+  return `From: ${displayName} <${match.sendAsEmail}>`
+}
+
+/**
  * Create a Gmail draft, optionally with file attachments and HTML body.
  * attachmentPaths: array of absolute local file paths to attach.
  * bodyHtml: optional HTML version of the body (enables rich formatting and hyperlinks).
  * cc: optional CC email address(es), comma-separated string.
+ * from: optional send-as alias; must be a verified send-as on the account.
  */
-export async function createGmailDraft(auth, to, subject, body, attachmentPaths = [], threadId = null, replyToMessageId = null, bodyHtml = null, cc = null) {
+export async function createGmailDraft(auth, to, subject, body, attachmentPaths = [], threadId = null, replyToMessageId = null, bodyHtml = null, cc = null, from = null) {
   const gmail = google.gmail({ version: 'v1', auth })
+
+  const fromHeader = from ? [await resolveFromHeader(gmail, from)] : []
 
   const replyHeaders = replyToMessageId
     ? [`In-Reply-To: ${replyToMessageId}`, `References: ${replyToMessageId}`]
@@ -391,6 +417,7 @@ export async function createGmailDraft(auth, to, subject, body, attachmentPaths 
   if (!hasHtml && !hasAttachments) {
     // Simple plain text message
     const message = [
+      ...fromHeader,
       `To: ${to}`,
       ...ccHeader,
       `Subject: ${encodeMimeHeader(subject)}`,
@@ -405,6 +432,7 @@ export async function createGmailDraft(auth, to, subject, body, attachmentPaths 
     const plainText = body || stripHtml(bodyHtml)
     const { boundary, block } = buildAlternativePart(plainText, bodyHtml)
     const message = [
+      ...fromHeader,
       `To: ${to}`,
       ...ccHeader,
       `Subject: ${encodeMimeHeader(subject)}`,
@@ -458,6 +486,7 @@ export async function createGmailDraft(auth, to, subject, body, attachmentPaths 
     parts.push(`--${mixedBoundary}--`)
 
     const message = [
+      ...fromHeader,
       `To: ${to}`,
       ...ccHeader,
       `Subject: ${encodeMimeHeader(subject)}`,
@@ -490,7 +519,7 @@ export async function sendGmailDraft(auth, draftId) {
   const gmail = google.gmail({ version: 'v1', auth })
   const { data } = await gmail.users.drafts.send({
     userId: 'me',
-    requestBody: { id: draftId },
+    requestBody: { id: await resolveDraftId(gmail, draftId) },
   })
   return { sent: true, messageId: data.id, threadId: data.threadId, labelIds: data.labelIds }
 }
@@ -620,8 +649,25 @@ export async function sendGmailMessage(auth, to, subject, body, attachmentPaths 
  */
 export async function deleteGmailDraft(auth, draftId) {
   const gmail = google.gmail({ version: 'v1', auth })
-  await gmail.users.drafts.delete({ userId: 'me', id: draftId })
-  return { deleted: true, draftId }
+  const id = await resolveDraftId(gmail, draftId)
+  await gmail.users.drafts.delete({ userId: 'me', id })
+  return { deleted: true, draftId: id }
+}
+
+/**
+ * Accept a draft ID ("r-123...") or a draft's MESSAGE ID (16 hex chars, what gmail_search
+ * returns for in:drafts) and return the real draft ID. Throws if no draft has that message.
+ */
+async function resolveDraftId(gmail, id) {
+  if (!/^[0-9a-f]{16}$/i.test(id)) return id
+  let pageToken
+  do {
+    const { data } = await gmail.users.drafts.list({ userId: 'me', maxResults: 500, pageToken })
+    const hit = (data.drafts || []).find(d => d.message?.id === id)
+    if (hit) return hit.id
+    pageToken = data.nextPageToken
+  } while (pageToken)
+  throw new Error(`No draft found with draft ID or message ID ${id}`)
 }
 
 /**
