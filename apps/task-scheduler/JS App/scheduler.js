@@ -291,8 +291,9 @@ function getDopplerSecrets() {
 // (wiped 2026-10-21 after updates and 2026-10-26 after a 9:11am reboot), and git
 // pushes go through `gh auth git-credential`, so every HTTPS push failed until a
 // manual re-auth. gh (and its credential helper) prefers GH_TOKEN over the keyring,
-// so inject the Doppler PAT (project github-mcp, the same one a GitHub MCP
-// would use) and the keyring stops mattering. Cached per process like _dopplerSecrets:
+// so inject the Doppler PAT (claude-mcps/prd_github since 2026-11-13, the same config
+// the GitHub MCP uses; the service token in its .env selects the config, so no
+// --project/--config flags) and the keyring stops mattering. Cached per process like _dopplerSecrets:
 // rotating the PAT needs a scheduler restart.
 const GITHUB_ENV_PATH = path.join(__dirname, '..', '..', '..', '..', 'Tools', 'GitHub-MCP', '.env');
 let _githubPat = null;
@@ -306,7 +307,7 @@ function getGithubPat() {
       return _githubPat;
     }
     const out = require('child_process').execSync(
-      `"${resolveDopplerBin()}" secrets get GITHUB_PERSONAL_ACCESS_TOKEN --plain --project github-mcp --config dev`,
+      `"${resolveDopplerBin()}" secrets get GITHUB_PERSONAL_ACCESS_TOKEN --plain`,
       { env: { ...process.env, DOPPLER_TOKEN: tokenMatch[1].trim().replace(/^["']|["']$/g, '') }, encoding: 'utf8' }
     );
     _githubPat = out.trim();
