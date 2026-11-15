@@ -496,7 +496,11 @@ function runOnce(task, spawnConfig, env, logPath) {
       const text = data.toString();
       if (NON_RETRYABLE_PATTERN.test(text)) sawNonRetryable = true;
       if (TRANSIENT_API_PATTERN.test(text)) sawTransientError = true;
-      if (SELF_REPORTED_FAILURE_PATTERN.test(text)) sawSelfReportedFailure = true;
+      // A command task with its own successPattern is judged by that line alone: its
+      // output is data (video titles etc.), not agent prose. youtube-playlist-summary
+      // transcribed "Elon Is Giving Up" on 2026-11-11 and was flagged nightly after.
+      const phraseScan = !(task.type === 'command' && task.successPattern);
+      if (phraseScan && SELF_REPORTED_FAILURE_PATTERN.test(text)) sawSelfReportedFailure = true;
       // A `claude -p` task's final report goes to stdout. If the child produced
       // stdout before we timed it out, its work completed and only the process
       // shutdown ran long — that's a success we shouldn't flag red.
