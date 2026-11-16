@@ -386,7 +386,7 @@ const TRANSIENT_API_PATTERN = /overloaded_error|rate_limit_error|API Error:\s*(4
 // healthy runs legitimately report things like "0 failed". "gated(?! off)": a run
 // saying its time-of-day "Slack post is gated off" is a normal skip, not the approval
 // gate blocking it (false alarm on fathom-meeting-ingest, 2026-10-23 16:00).
-const SELF_REPORTED_FAILURE_PATTERN = /still connecting|tools (?:were|are) unavailable|MCP (?:server|tools?) (?:is |are |was |were )?(?:not |un)available|tools? (?:is|are|were) not available|no \S+ tools? (?:are|were) (?:discoverable|available)|not discoverable through it|unable to complete|could not run|could not complete|no accounts were checked|giving up|aborting the run|the slack gate blocked|slack (?:post|message) (?:is|was) gated(?! off)|posting outside [^\n]{0,60}needs your explicit go-ahead|approve-slack-post/i;
+const SELF_REPORTED_FAILURE_PATTERN = /still connecting|tools (?:were|are) unavailable|MCP (?:server|tools?) (?:is |are |was |were )?(?:not |un)available|tools? (?:is|are|were) not available|no \S+ tools? (?:are|were) (?:discoverable|available)|not discoverable through it|unable to complete|could not run|could not complete|no accounts were checked|\bI(?:'m| am) giving up|aborting the run|the slack gate blocked|slack (?:post|message) (?:is|was) gated(?! off)|posting outside [^\n]{0,60}needs your explicit go-ahead|approve-slack-post/i;
 
 // A 429 that means "out of money" is permanent: retrying only re-runs the pipeline
 // after its earlier stages already committed (2026-10-17: the retry found 0 new videos,
