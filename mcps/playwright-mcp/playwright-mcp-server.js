@@ -67,8 +67,23 @@ try {
   const crashLine = (msg) => {
     try { fs.appendFileSync(logFile, '[' + new Date().toISOString() + '] [playwright-mcp-server] ' + msg + '\n'); } catch (e) { /* best-effort */ }
   };
+  // ── run_code sandbox containment (2026-11-16) ──
+  // browser_run_code runs caller code in a vm sandbox (stack frames "evalmachine.")
+  // with no URL/setTimeout/console. A listener it registers (page.on('request', ...))
+  // fires AFTER run_code's own try/catch, so a ReferenceError there was uncaught and
+  // killed this shared server, dropping every session's browser (11/11 x4, 11/16).
+  // Sandbox-origin errors are logged and swallowed; anything else still exits 1.
+  const isSandboxError = (err) => !!(err && typeof err.stack === 'string' && err.stack.includes('evalmachine.'));
   process.on('uncaughtExceptionMonitor', (err, origin) => {
+    if (isSandboxError(err)) return; // logged as CONTAINED below
     crashLine(`FATAL ${origin}: ${err && err.stack ? err.stack : err}`);
+  });
+  process.on('uncaughtException', (err, origin) => {
+    if (isSandboxError(err)) {
+      crashLine(`CONTAINED ${origin} from run_code sandbox (server kept running): ${err.stack}`);
+      return;
+    }
+    process.exit(1);
   });
   process.on('exit', (code) => crashLine(`Exit code ${code}`));
   // V8 OOM cannot be caught in JS; a diagnostic report lands in logs/ instead.
