@@ -326,7 +326,7 @@ export async function createDriveFolder(auth, name, parentFolderId) {
 
   const { data: found } = await drive.files.list({
     q: existingQuery,
-    fields: 'files(id, name, mimeType, webViewLink)',
+    fields: 'files(id, name, mimeType, webViewLink, parents)',
     pageSize: 1,
   })
 
@@ -337,6 +337,7 @@ export async function createDriveFolder(auth, name, parentFolderId) {
       name: folder.name,
       mimeType: folder.mimeType,
       webViewLink: folder.webViewLink,
+      parents: folder.parents || [],
       created: false,
     }
   }
@@ -347,7 +348,7 @@ export async function createDriveFolder(auth, name, parentFolderId) {
       mimeType: 'application/vnd.google-apps.folder',
       parents: parentFolderId ? [parentFolderId] : undefined,
     },
-    fields: 'id, name, mimeType, webViewLink',
+    fields: 'id, name, mimeType, webViewLink, parents',
   })
 
   return {
@@ -355,6 +356,7 @@ export async function createDriveFolder(auth, name, parentFolderId) {
     name: data.name,
     mimeType: data.mimeType,
     webViewLink: data.webViewLink,
+    parents: data.parents || [],
     created: true,
   }
 }

@@ -43,22 +43,25 @@ export async function createSpreadsheet(auth, title, sheetTitles, initialValues,
   }
 
   // Optionally move into a target folder.
+  const drive = google.drive({ version: 'v3', auth })
+  const { data: meta } = await drive.files.get({ fileId: spreadsheetId, fields: 'parents' })
+  let parents = meta.parents || []
   if (folderId) {
-    const drive = google.drive({ version: 'v3', auth })
-    const { data: meta } = await drive.files.get({ fileId: spreadsheetId, fields: 'parents' })
-    const prevParents = (meta.parents || []).join(',')
-    await drive.files.update({
+    const prevParents = parents.join(',')
+    const { data: moved } = await drive.files.update({
       fileId: spreadsheetId,
       addParents: folderId,
       removeParents: prevParents || undefined,
       fields: 'id, parents',
     })
+    parents = moved.parents || []
   }
 
   return {
     id: spreadsheetId,
     title: data.properties.title,
     url: data.spreadsheetUrl,
+    parents,
     sheets: (data.sheets || []).map(s => ({
       sheetId: s.properties.sheetId,
       title: s.properties.title,

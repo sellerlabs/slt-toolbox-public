@@ -40,22 +40,25 @@ export async function createPresentation(auth, title, folderId) {
   const { data } = await slides.presentations.create({ requestBody: { title } })
   const presentationId = data.presentationId
 
+  const drive = google.drive({ version: 'v3', auth })
+  const { data: meta } = await drive.files.get({ fileId: presentationId, fields: 'parents' })
+  let parents = meta.parents || []
   if (folderId) {
-    const drive = google.drive({ version: 'v3', auth })
-    const { data: meta } = await drive.files.get({ fileId: presentationId, fields: 'parents' })
-    const prevParents = (meta.parents || []).join(',')
-    await drive.files.update({
+    const prevParents = parents.join(',')
+    const { data: moved } = await drive.files.update({
       fileId: presentationId,
       addParents: folderId,
       removeParents: prevParents || undefined,
       fields: 'id, parents',
     })
+    parents = moved.parents || []
   }
 
   return {
     id: presentationId,
     title: data.title,
     url: `https://docs.google.com/presentation/d/${presentationId}/edit`,
+    parents,
     slides: summarizeSlides(data),
   }
 }

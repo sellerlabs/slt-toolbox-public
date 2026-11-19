@@ -57,22 +57,25 @@ export async function createDoc(auth, title, initialText, folderId) {
     })
   }
 
+  const drive = google.drive({ version: 'v3', auth })
+  const { data: meta } = await drive.files.get({ fileId: documentId, fields: 'parents' })
+  let parents = meta.parents || []
   if (folderId) {
-    const drive = google.drive({ version: 'v3', auth })
-    const { data: meta } = await drive.files.get({ fileId: documentId, fields: 'parents' })
-    const prevParents = (meta.parents || []).join(',')
-    await drive.files.update({
+    const prevParents = parents.join(',')
+    const { data: moved } = await drive.files.update({
       fileId: documentId,
       addParents: folderId,
       removeParents: prevParents || undefined,
       fields: 'id, parents',
     })
+    parents = moved.parents || []
   }
 
   return {
     id: documentId,
     title: data.title,
     url: `https://docs.google.com/document/d/${documentId}/edit`,
+    parents,
   }
 }
 

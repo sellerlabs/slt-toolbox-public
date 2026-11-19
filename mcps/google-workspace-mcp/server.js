@@ -63,6 +63,23 @@ const server = new McpServer({
   version: '1.0.0',
 })
 
+// Reject unknown parameters on EVERY tool (2026-11-18). The SDK wraps a raw
+// shape in a default z.object, which silently STRIPS unknown keys, so a call
+// like drive_create_folder({ parentId }) dropped the parent and created the
+// folder in My Drive root while reporting success. Re-route server.tool()
+// through registerTool() with a .strict() object so an unknown key is a hard
+// error that names the valid parameters. Aliases are rejected, not mapped.
+const _registerTool = server.registerTool.bind(server)
+server.tool = (name, description, shape, handler) => {
+  const valid = Object.keys(shape)
+  const inputSchema = z.object(shape, {
+    errorMap: (issue, ctx) => issue.code === 'unrecognized_keys'
+      ? { message: `Unknown parameter(s) for ${name}: ${issue.keys.join(', ')}. Valid parameters: ${valid.join(', ') || '(none)'}. Nothing was written. Re-send with the correct parameter name.` }
+      : { message: ctx.defaultError },
+  }).strict()
+  return _registerTool(name, { description, inputSchema }, handler)
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 function formatAccountResults(results) {
