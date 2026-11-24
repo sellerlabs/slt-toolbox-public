@@ -1,0 +1,27 @@
+name: playwright-install-test
+on:
+  push:
+    paths: ['mcps/playwright-mcp/**', '.github/**']
+  schedule:
+    - cron: '0 12 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Headless mode uses bundled Chromium on Mac, matching the README.
+      - if: runner.os == 'macOS'
+        working-directory: mcps/playwright-mcp
+        run: npm install --no-audit --no-fund && npx playwright install chromium
+      - run: node .github/playwright-install-test.mjs mcps/playwright-mcp
