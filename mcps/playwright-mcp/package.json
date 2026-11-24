@@ -10,7 +10,7 @@
     "start:launcher": "node playwright-mcp-launcher.js"
   },
   "dependencies": {
-    "@playwright/mcp": "^0.0.30"
+    "@playwright/mcp": "0.0.68"
   },
   "engines": {
     "node": ">=18"

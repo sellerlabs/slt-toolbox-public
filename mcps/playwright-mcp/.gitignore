@@ -8,9 +8,6 @@ temp/
 .playwright-mcp/
 .playwright-profiles/
 
-# Cached tool manifest (regenerated at runtime)
-tools-cache.json
-
 # Logs
 Logs/
 *.log

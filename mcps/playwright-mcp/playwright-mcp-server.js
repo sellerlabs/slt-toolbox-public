@@ -27,6 +27,7 @@ const path = require('path');
 const fs = require('fs');
 const { execSync, spawn } = require('child_process');
 const http = require('http');
+const { resolveEngine } = require('./resolve-engine');
 
 // ── stderr tee ───────────────────────────────────────────────────────────────
 // On Windows the bridge starts this server via a Scheduled Task with
@@ -375,25 +376,6 @@ function waitForCdpPort(port, timeoutMs) {
   });
 }
 
-// ── Locate @playwright/mcp installation ──────────────────────────────────────
-
-function findPlaywrightMcpDir() {
-  const candidates = [
-    path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@playwright', 'mcp'),
-    '/opt/homebrew/lib/node_modules/@playwright/mcp',
-    '/usr/local/lib/node_modules/@playwright/mcp',
-    '/usr/lib/node_modules/@playwright/mcp',
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  try {
-    const p = path.join(execSync('npm root -g', { encoding: 'utf8' }).trim(), '@playwright', 'mcp');
-    if (fs.existsSync(p)) return p;
-  } catch (e) {}
-  throw new Error('@playwright/mcp not found. Run: npm install -g @playwright/mcp');
-}
-
 // ── Stale Chrome cleanup ──────────────────────────────────────────────────────
 
 async function killStaleChrome(profileDir) {
@@ -635,8 +617,7 @@ function createSessionContextFactory(getSharedContext) {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const mcpDir = findPlaywrightMcpDir();
-  const playwrightDir = path.join(mcpDir, 'node_modules', 'playwright');
+  const { playwrightDir } = resolveEngine();
 
   // Load internals from @playwright/mcp's bundled playwright
   const playwright = require(playwrightDir);

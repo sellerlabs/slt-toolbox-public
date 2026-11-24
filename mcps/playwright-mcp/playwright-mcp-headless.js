@@ -1,7 +1,7 @@
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { resolveEngine } = require('./resolve-engine');
 
 // Create a unique user data dir per process to allow multiple parallel instances
 const userDataDir = path.join(os.tmpdir(), `playwright-mcp-headless-${process.pid}`);
@@ -50,34 +50,6 @@ if (process.platform === 'win32' && fs.existsSync(systemChrome)) {
   process.argv.push('--browser', 'chromium', '--headless', '--user-data-dir', userDataDir, '--output-dir', outputDir);
 }
 
-// Find @playwright/mcp cli.js dynamically across platforms
-function findPlaywrightMcp() {
-  // Try common global npm paths
-  const candidates = [
-    // Windows
-    path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@playwright', 'mcp', 'cli.js'),
-    // macOS Homebrew (Apple Silicon)
-    '/opt/homebrew/lib/node_modules/@playwright/mcp/cli.js',
-    // macOS Homebrew (Intel)
-    '/usr/local/lib/node_modules/@playwright/mcp/cli.js',
-    // Linux / generic
-    '/usr/lib/node_modules/@playwright/mcp/cli.js',
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-
-  // Fallback: ask npm where global modules live
-  try {
-    const globalRoot = execSync('npm root -g', { encoding: 'utf8' }).trim();
-    const npmPath = path.join(globalRoot, '@playwright', 'mcp', 'cli.js');
-    if (fs.existsSync(npmPath)) return npmPath;
-  } catch (e) { /* ignore */ }
-
-  throw new Error('@playwright/mcp not found. Run: npm install -g @playwright/mcp');
-}
-
 // ── Credential masking ───────────────────────────────────────────────────────
 //
 // The visible bridge is a stdio<->SSE proxy, so it can mask tool-result text as
@@ -112,4 +84,4 @@ process.stdout.write = function (chunk, encoding, callback) {
   return _origStdoutWrite(chunk, encoding, callback);
 };
 
-require(findPlaywrightMcp());
+require(resolveEngine().cli);

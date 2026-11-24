@@ -21,7 +21,7 @@ This wraps [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) with
 
 - Node.js 18+
 - Google Chrome installed (for visible mode)
-- `@playwright/mcp`
+- `@playwright/mcp` 0.0.68, installed by `npm install` below. Later versions removed internals this server uses and will not work.
 
 ## Setup
 
@@ -29,10 +29,10 @@ This wraps [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) with
 
 ```bash
 npm install
-npx playwright install
+npx playwright install chromium   # only needed for headless mode without system Chrome
 ```
 
-A global install (`npm install -g @playwright/mcp`) also works: every entry point resolves the package from a local `node_modules`, the standard global locations, or `npm root -g`, in that order.
+No admin rights are needed: the engine installs into this folder's `node_modules`. A global install also works (`npm install -g @playwright/mcp@0.0.68`). Every entry point checks the local `node_modules`, then the standard global locations, then `npm root -g`, and skips incompatible versions.
 
 ### 2. Register with your MCP client
 
@@ -105,6 +105,8 @@ Set `COMPRESS_SNAPSHOTS=0` to disable pruning and pass snapshots through untouch
 | `playwright-mcp-headless.js` | Headless-mode entry (bundled Chromium) |
 | `playwright-mcp-server.js` | The shared server — session proxy, download routing/repair, persistence |
 | `playwright-mcp-launcher.js` | Thin launcher that resolves and runs `@playwright/mcp` directly |
+| `resolve-engine.js` | Finds a compatible `@playwright/mcp` for all entry points |
+| `tools-cache.json` | Tool list visible mode answers with at startup, before the browser server runs. Matches 0.0.68 |
 | `mask-credentials.js` | Masks credential-shaped values in tool results before they reach the model |
 
 ## Notes
