@@ -351,7 +351,7 @@ async function routeChromeDownloads(context) {
 
 function findChromeExecutable() {
   const candidates = process.platform === 'darwin'
-    ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+    ? ['/Applications', path.join(os.homedir(), 'Applications')].map(d => path.join(d, 'Google Chrome.app/Contents/MacOS/Google Chrome'))
     : [
         path.join(process.env['PROGRAMFILES'] || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
         path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -378,7 +378,39 @@ function waitForCdpPort(port, timeoutMs) {
 
 // ── Stale Chrome cleanup ──────────────────────────────────────────────────────
 
+// Mac/Linux counterpart of the PowerShell cleanup below. Until 2026-11-24 only PowerShell
+// ran, so a Mac server restarted after a crash attached to the leftover Chrome.
+async function killStaleChromePosix(profileDir) {
+  try {
+    // -ww: never truncate the command line. Match the whole flag value, so a profile
+    // whose name merely starts the same is left alone.
+    const flag = '--user-data-dir=' + profileDir;
+    const findPids = () => execSync('ps -axww -o pid=,command=', { encoding: 'utf8', timeout: 20000, maxBuffer: 64 * 1024 * 1024 })
+      .split('\n')
+      .filter(l => /chrom/i.test(l) && (l + ' ').includes(flag + ' '))
+      .map(l => parseInt(l, 10))
+      .filter(pid => pid > 0 && pid !== process.pid);
+    const signal = (pids, sig) => pids.forEach(pid => { try { process.kill(pid, sig); } catch (e) { /* already gone */ } });
+    let pids = findPids();
+    if (!pids.length) return;
+    process.stderr.write('[playwright-mcp-server] Killing stale Chrome: PIDs ' + pids.join(', ') + '\n');
+    signal(pids, 'SIGTERM');
+    // Give Chrome up to 5s to exit cleanly (saves cookies), then force it.
+    for (let i = 0; i < 20 && pids.length; i++) {
+      await new Promise(r => setTimeout(r, 250));
+      pids = findPids();
+    }
+    if (pids.length) {
+      signal(pids, 'SIGKILL');
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  } catch (e) {
+    process.stderr.write('[playwright-mcp-server] Stale Chrome check failed (non-fatal): ' + e.message + '\n');
+  }
+}
+
 async function killStaleChrome(profileDir) {
+  if (process.platform !== 'win32') return killStaleChromePosix(profileDir);
   // Find and kill any Chrome process using THIS profile (orphaned from a prior run).
   // The pattern comes from profileDir. It was hardcoded to visible-primary, so a
   // server started on any other profile killed the LIVE browser instead of its own.
