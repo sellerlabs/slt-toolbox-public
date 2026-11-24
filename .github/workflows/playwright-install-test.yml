@@ -1,6 +1,7 @@
 name: playwright-install-test
 on:
   push:
+    branches-ignore: [sync-staging]
     paths: ['mcps/playwright-mcp/**', '.github/**']
   schedule:
     - cron: '0 12 * * 1'

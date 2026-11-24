@@ -108,10 +108,14 @@ await step('visible bridge', async () => {
 });
 
 // Shared server: real Chrome page load over SSE, on its own ports, home and profile.
-await step('server', async () => {
+// Runs twice on one profile: the first run leaves Chrome behind (server killed, as in a
+// crash) and the second must replace it, not attach to it.
+const browserId = async () => (await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json()).webSocketDebuggerUrl;
+let staleId;
+const runServer = async (restart) => {
   // A relative profile name keeps the test profile out of ~/.playwright-profiles.
   // (Faking HOME/USERPROFILE instead stops Chrome opening its debug port on Windows.)
-  const profile = path.relative(path.join(os.homedir(), '.playwright-profiles'), path.join(work, 'install-test-' + process.pid));
+  const profile = path.relative(path.join(os.homedir(), '.playwright-profiles'), path.join(work, 'install-test-' + process.pid + '-profile'));
   fs.mkdirSync(path.join(os.homedir(), 'Downloads'), { recursive: true });
   const child = spawn(process.execPath, [path.join(pkg, 'playwright-mcp-server.js')], {
     env: { ...env, PLAYWRIGHT_MCP_PORT: String(PORT), PLAYWRIGHT_MCP_CDP_PORT: String(CDP_PORT), PLAYWRIGHT_MCP_PROFILE: profile },
@@ -150,11 +154,19 @@ await step('server', async () => {
       }
     });
     await deadline(gotEndpoint, 15000, 'sse endpoint');
-    const tools = await handshake(c, 'server');
+    const mode = restart ? 'server restart' : 'server';
+    const tools = await handshake(c, mode);
     const names = (t) => JSON.stringify(t.map((x) => x.name).sort());
-    check('tools-cache.json matches the engine', names(tools) === names(bridgeTools), 'cached names differ from live names');
-    await loadPage(c, 'server (system Chrome)');
+    if (!restart) check('tools-cache.json matches the engine', names(tools) === names(bridgeTools), 'cached names differ from live names');
+    await loadPage(c, mode + ' (system Chrome)');
+    const id = await browserId();
+    if (restart) check('server restart: leftover Chrome replaced', staleId && id !== staleId, id);
+    else staleId = id;
   } finally {
+    if (!restart) {
+      child.kill('SIGKILL');
+      await new Promise((r) => setTimeout(r, 1000));
+    } else {
     // Close the Chrome the server spawned, through its own debug port.
     try {
       const { webSocketDebuggerUrl } = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json();
@@ -166,8 +178,11 @@ await step('server', async () => {
       });
     } catch { /* Chrome never started */ }
     child.kill();
+    }
   }
-});
+};
+await step('server', () => runServer(false));
+await step('server restart', () => runServer(true));
 
 console.log(failed ? `${failed} check(s) failed` : 'All install checks passed');
 process.exit(failed ? 1 : 0);
