@@ -2,7 +2,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { WebClient } from '@slack/web-api';
 import { z } from 'zod';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { isUtf8 } from 'buffer';
+import { tmpdir } from 'os';
 import { basename } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -85,8 +87,33 @@ async function resolveChannel(client, channel) {
     } while (cursor);
   }
   const id = channelCache.get(trimmed);
-  if (!id) throw new Error(`Channel "${channel}" not found (bot may not be a member, or the name is wrong).`);
+  if (!id) throw Object.assign(new Error(`Channel "${channel}" not found (bot may not be a member, or the name is wrong).`), { channelNotFound: true });
   return id;
+}
+
+// Read tools only: if the bot can't see the name, search the private channels the user belongs to
+// (groups:read). Post tools keep using resolveChannel so a name never resolves via the user's access.
+let userChannelCache = null;
+async function resolveChannelForRead(client, channel) {
+  try {
+    return await resolveChannel(client, channel);
+  } catch (err) {
+    if (!err.channelNotFound || !process.env.SLACK_USER_TOKEN) throw err;
+    if (!userChannelCache) {
+      const found = new Map();
+      const userClient = getUserClient();
+      let cursor;
+      do {
+        const res = await userClient.users.conversations({ types: 'private_channel', exclude_archived: true, limit: 200, cursor });
+        for (const c of res.channels || []) found.set(c.name, c.id);
+        cursor = res.response_metadata?.next_cursor || undefined;
+      } while (cursor);
+      userChannelCache = found;
+    }
+    const id = userChannelCache.get(channel.trim().replace(/^#/, ''));
+    if (!id) throw err;
+    return id;
+  }
 }
 
 function ok(text) {
@@ -98,18 +125,25 @@ function apiError(err) {
   return new Error(`Slack API error: ${detail}`);
 }
 
-// Channel reads: try the bot token first; if the bot isn't in the channel, retry with the
-// user token (channels:history / groups:history), which reads any channel the user is in.
+// Channel and file reads: try the bot token first; if the bot isn't in the channel (Slack reports
+// that as file_not_found for files), retry with the user token (channels:history / groups:history /
+// files:read), which reads anything the user can see.
+const FALLBACK_ERRORS = ['not_in_channel', 'channel_not_found', 'file_not_found'];
 async function readWithUserFallback(fn) {
   try {
     return await fn(getClient());
   } catch (err) {
     const code = err?.data?.error;
-    if ((code === 'not_in_channel' || code === 'channel_not_found') && process.env.SLACK_USER_TOKEN) {
+    if (FALLBACK_ERRORS.includes(code) && process.env.SLACK_USER_TOKEN) {
       return await fn(getUserClient());
     }
     throw err;
   }
+}
+
+// Attachments on a message, one line each. Slack omits `files` entirely when the token lacks files:read.
+function fileLines(m) {
+  return (m.files || []).map(f => `\n  [file ${f.id}] ${f.name || f.title || '(name hidden)'} (${f.mimetype || f.filetype || f.file_access || f.mode || '?'}), use slack_get_file`).join('');
 }
 
 const server = new McpServer({ name: 'slack-mcp', version: '1.0.0' });
@@ -170,13 +204,13 @@ server.registerTool('slack_read_channel', {
 }, async ({ channel, limit }) => {
   const client = getClient();
   try {
-    const channelId = await resolveChannel(client, channel || DEFAULT_CHANNEL);
+    const channelId = await resolveChannelForRead(client, channel);
     const res = await readWithUserFallback(c => c.conversations.history({ channel: channelId, limit }));
     const msgs = res.messages || [];
     if (!msgs.length) return ok('No messages found.');
     // reply_count MUST be surfaced: without it a parent carrying threaded replies renders
     // identically to one with none, which silently hides whole conversations from the reader.
-    const lines = msgs.map(m => `[ts ${m.ts}]${m.thread_ts && m.thread_ts !== m.ts ? ' (reply)' : ''}${m.reply_count ? ` [thread: ${m.reply_count} replies, use slack_read_thread with thread_ts ${m.ts}]` : ''} ${m.user || m.username || m.bot_id || '?'}: ${m.text || ''}`);
+    const lines = msgs.map(m => `[ts ${m.ts}]${m.thread_ts && m.thread_ts !== m.ts ? ' (reply)' : ''}${m.reply_count ? ` [thread: ${m.reply_count} replies, use slack_read_thread with thread_ts ${m.ts}]` : ''} ${m.user || m.username || m.bot_id || '?'}: ${m.text || ''}${fileLines(m)}`);
     return ok(lines.join('\n\n'));
   } catch (err) {
     throw apiError(err);
@@ -194,12 +228,12 @@ server.registerTool('slack_read_thread', {
 }, async ({ channel, thread_ts, limit }) => {
   const client = getClient();
   try {
-    const channelId = await resolveChannel(client, channel || DEFAULT_CHANNEL);
+    const channelId = await resolveChannelForRead(client, channel);
     const res = await readWithUserFallback(c => c.conversations.replies({ channel: channelId, ts: thread_ts, limit }));
     const msgs = res.messages || [];
     if (!msgs.length) return ok('No messages found in thread.');
     // conversations.replies returns the parent as the first element, not a reply.
-    const lines = msgs.map((m, i) => `[ts ${m.ts}] ${i === 0 ? '(parent)' : '(reply)'} ${m.user || m.username || m.bot_id || '?'}: ${m.text || ''}`);
+    const lines = msgs.map((m, i) => `[ts ${m.ts}] ${i === 0 ? '(parent)' : '(reply)'} ${m.user || m.username || m.bot_id || '?'}: ${m.text || ''}${fileLines(m)}`);
     const summary = `Thread ${thread_ts} in ${channel}: ${msgs.length - 1} repl${msgs.length - 1 === 1 ? 'y' : 'ies'} (parent shown first).`;
     return ok(summary + '\n\n' + lines.join('\n\n'));
   } catch (err) {
@@ -277,25 +311,31 @@ server.registerTool('slack_upload_file', {
 
 // ---- get_file -------------------------------------------------------------
 server.registerTool('slack_get_file', {
-  description: 'Fetch the content of a Slack-hosted file by file ID or Slack file URL (files.info + authenticated download of url_private_download). Requires the files:read scope AND the bot being a member of the channel the file was shared in — otherwise Slack returns file_not_found. Text files are returned inline; binary files return metadata and the download URL only.',
+  description: 'Fetch the content of a Slack-hosted file by file ID or Slack file URL (files.info + authenticated download of url_private_download). Tries the bot token, then falls back to the user token, so files in any channel the user is in are reachable (both need files:read). Text files are returned inline; binary files (PDF, DOCX, images) are saved to disk and the path is returned. File IDs are listed by slack_read_channel / slack_read_thread.',
   inputSchema: {
     file: z.string().describe('File ID (F…) or a Slack file permalink such as https://<workspace>.slack.com/files/U…/F…/name.md'),
     max_bytes: z.number().int().min(1).max(2000000).default(500000).describe('Max bytes of text content to return (default 500000).'),
+    save_dir: z.string().optional().describe('Absolute folder to save binary files into (created if missing). Defaults to slack-mcp-files in the OS temp folder.'),
   },
-}, async ({ file, max_bytes }) => {
-  const { SLACK_BOT_TOKEN } = process.env;
-  const client = getClient();
+}, async ({ file, max_bytes, save_dir }) => {
   const match = file.trim().match(/\b(F[A-Z0-9]{6,})\b/);
   if (!match) throw new Error(`Could not extract a Slack file ID (F…) from "${file}".`);
   const fileId = match[1];
   try {
-    const info = await client.files.info({ file: fileId });
+    // Download with the same token that could see the file.
+    const { info, token } = await readWithUserFallback(async c => ({ info: await c.files.info({ file: fileId }), token: c.token }));
     const f = info.file || {};
     const meta = `name: ${f.name || '?'}\nid: ${fileId}\ntype: ${f.filetype || '?'} (${f.mimetype || '?'})\nsize: ${f.size ?? '?'} bytes\nuser: ${f.user || '?'}\nchannels: ${[...(f.channels || []), ...(f.groups || []), ...(f.ims || [])].join(', ') || 'none visible to bot'}`;
     const url = f.url_private_download || f.url_private;
     if (!url) return ok(`${meta}\n\n(No download URL on this file.)`);
 
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
+    // External files (Google Drive etc.) carry a non-Slack URL: never send a token there.
+    const { protocol, hostname } = new URL(url);
+    if (protocol !== 'https:' || !(hostname === 'slack.com' || hostname.endsWith('.slack.com'))) {
+      return ok(`${meta}\n\n(Externally hosted file, not downloaded: ${url})`);
+    }
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}. ${meta}`);
     const contentType = res.headers.get('content-type') || '';
     // Slack answers an unauthenticated/redirected fetch with an HTML login page at HTTP 200,
     // so the content type is the real success check, not res.ok.
@@ -316,8 +356,16 @@ server.registerTool('slack_get_file', {
     const buf = Buffer.from(await res.arrayBuffer());
     const sample = buf.subarray(0, 8000);
     const hasNul = sample.includes(0);
-    if (!looksTextByType && hasNul) {
-      return ok(`${meta}\n\n(Binary file, content not returned. content-type: ${contentType})`);
+    // NUL wins over the type check: DOCX/XLSX content types contain "xml". A PDF may have no
+    // early NUL, so anything not text by type must also be valid UTF-8 to be shown inline.
+    if (hasNul || (!looksTextByType && !isUtf8(buf))) {
+      const dir = save_dir || join(tmpdir(), 'slack-mcp-files');
+      mkdirSync(dir, { recursive: true });
+      // The name comes from whoever uploaded it: keep only safe characters, prefix the ID.
+      const safeName = (f.name || 'file').replace(/[^\w.-]+/g, '-').slice(-120);
+      const savedPath = join(dir, `${fileId}-${safeName}`);
+      writeFileSync(savedPath, buf);
+      return ok(`${meta}\n\nBinary file (${buf.length} bytes) saved to: ${savedPath}`);
     }
     let truncated = '';
     let bytes = buf;
@@ -375,7 +423,7 @@ server.registerTool('slack_read_dm', {
     for (const m of msgs) {
       const who = m.user ? await userName(client, m.user) : (m.username || m.bot_id || '?');
       const thread = !thread_ts && m.reply_count ? ` [thread: ${m.reply_count} replies, re-call with thread_ts ${m.ts}]` : '';
-      lines.push(`[ts ${m.ts}]${thread} ${who}: ${m.text || ''}`);
+      lines.push(`[ts ${m.ts}]${thread} ${who}: ${m.text || ''}${fileLines(m)}`);
     }
     return ok(`DM ${channelId}${thread_ts ? `, thread ${thread_ts}` : ''}:\n\n${lines.join('\n\n')}`);
   } catch (err) {
@@ -398,6 +446,54 @@ server.registerTool('slack_post_as_user', {
     const channelId = await resolveDm(client, channel);
     const res = await client.chat.postMessage({ channel: channelId, text, thread_ts });
     return ok(`Posted as the user to ${channelId}.\nts: ${res.ts}${thread_ts ? `\nthread: ${thread_ts}` : ''}`);
+  } catch (err) {
+    throw apiError(err);
+  }
+});
+
+// Both tools below act as the user and are gated by slackApprovalGate, like slack_post_as_user.
+// Kept separate from the bot tools so a bot call can never silently switch to the user's identity.
+server.registerTool('slack_upload_file_as_user', {
+  description: "Upload a local file (e.g. a screenshot) AS THE USER (user token, files:write) into a DM, group DM, or any channel the user is a member of, optionally in a thread. Use when the bot is not in the channel. Requires the user's go-ahead on the file and channel plus an approval token (hook-gated).",
+  inputSchema: {
+    channel: z.string().optional().describe('DM ID (D…), group DM (G…), channel ID (C…) the user belongs to, or the other person\'s user ID (U…). Mint the approval token for this exact value.'),
+    file_path: z.string().describe('Absolute path to the local file to upload.'),
+    title: z.string().optional().describe('Optional file title shown in Slack.'),
+    initial_comment: z.string().optional().describe('Optional message posted with the file (Slack mrkdwn).'),
+    thread_ts: z.string().optional().describe('Optional thread ts to attach the file to a thread.'),
+  },
+}, async ({ channel, file_path, title, initial_comment, thread_ts }) => {
+  const client = getUserClient();
+  try {
+    const channelId = await resolveDm(client, channel);
+    const res = await client.files.uploadV2({
+      channel_id: channelId,
+      file: readFileSync(file_path),
+      filename: basename(file_path),
+      title: title || basename(file_path),
+      initial_comment,
+      thread_ts,
+    });
+    const f = res.files?.[0]?.files?.[0] || res.file;
+    return ok(`Uploaded ${basename(file_path)} as the user to ${channelId}.${thread_ts ? `\nthread: ${thread_ts}` : ''}${f?.permalink ? `\n${f.permalink}` : ''}`);
+  } catch (err) {
+    throw apiError(err);
+  }
+});
+
+server.registerTool('slack_update_message_as_user', {
+  description: "Edit in place a message previously posted AS THE USER (user token, chat.update). Only the user's own messages can be edited; for bot messages use slack_update_message. Requires the user's go-ahead on the exact new text plus an approval token (hook-gated).",
+  inputSchema: {
+    channel: z.string().optional().describe('DM ID (D…), group DM (G…), channel ID (C…), or the other person\'s user ID (U…). Mint the approval token for this exact value.'),
+    ts: z.string().describe('Timestamp (ts) of the message to edit.'),
+    text: z.string().min(1).describe('New message text (Slack mrkdwn). Replaces the whole message.'),
+  },
+}, async ({ channel, ts, text }) => {
+  const client = getUserClient();
+  try {
+    const channelId = await resolveDm(client, channel);
+    const res = await client.chat.update({ channel: channelId, ts, text });
+    return ok(`Updated message ${res.ts} as the user in ${channelId}.`);
   } catch (err) {
     throw apiError(err);
   }
